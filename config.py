@@ -20,5 +20,5 @@ EMAIL_SENDER = get_secret("EMAIL_SENDER")
 EMAIL_PASSWORD = get_secret("EMAIL_PASSWORD")
 EMAIL_RECEIVER = "rohit.sharma@edutap.co.in" 
 
-# Database Name (Legacy support)
+# Database Name
 DB_NAME = "edutap_rankings.db"
