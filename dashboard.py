@@ -7,11 +7,6 @@ from backend_utils import perform_update, get_all_keywords, add_keyword, delete_
 
 st.set_page_config(page_title="EduTap SEO Tracker", layout="wide")
 
-# --- 🔄 REFRESH BUTTON ---
-if st.sidebar.button("🔄 Force Refresh Data"):
-    st.cache_data.clear()
-    st.rerun()
-
 # --- 🔒 SECURITY LAYER (LOGIN SCREEN) ---
 if 'logged_in' not in st.session_state:
     st.session_state['logged_in'] = False
@@ -170,25 +165,20 @@ def categorize_cluster(row):
 tab1, tab2, tab3, tab4, tab5 = st.tabs(["📊 Dashboard", "📈 Visual Trends", "🏆 Competitors", "🧩 P1/P2 Analysis", "📝 Manage DB"])
 
 # --- SHARED HEADER WITH SMALL REFRESH BUTTON ---
-# We use columns to put the Title on the left and the Button on the right
-col_header, col_btn = st.columns([6, 1]) 
+col_header, col_btn = st.columns([6, 1])
 
 with col_header:
     st.title("📊 EduTap SEO Intelligence")
 
 with col_btn:
-    st.write("") # Add a little spacing to align with title
+    st.write("") # Spacer to push button down
     st.write("") 
     if st.button("🔄 Refresh", help="Force update data from Cloud"):
         st.cache_data.clear()
         st.rerun()
 
-# --- TAB 1 CONTENT STARTS ---
 with tab1:
-    # (Do not put st.title here anymore, we moved it up)
-    
     LOCK_ACTIVE = True; LIMIT_INR = 3500
-    # ... rest of your code ...
     if 'usd_rate' not in st.session_state: st.session_state['usd_rate'] = get_live_usd_inr_rate()
     USD_TO_INR = st.session_state['usd_rate']
     spent_usd = get_current_month_cost()
@@ -527,5 +517,3 @@ with tab5:
             cl = c4.text_input("Cluster"); v = c5.number_input("Vol"); u = c6.text_input("URL")
             if st.form_submit_button("Add"):
                 add_keyword(e,k,t,cl,v,u); st.success("Added"); st.rerun()
-
-
