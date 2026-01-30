@@ -2,10 +2,13 @@ import requests
 import time
 import pandas as pd
 import base64
+import smtplib
+from email.mime.text import MIMEText
+from email.mime.multipart import MIMEMultipart
 from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from supabase import create_client, Client
-from config import API_LOGIN, API_PASSWORD, SUPABASE_URL, SUPABASE_KEY
+from config import API_LOGIN, API_PASSWORD, SUPABASE_URL, SUPABASE_KEY, EMAIL_SENDER, EMAIL_PASSWORD, EMAIL_RECEIVER
 
 # --- CONNECT TO CLOUD ---
 try:
@@ -32,18 +35,11 @@ def fetch_all_rows(table_name):
     
     while True:
         try:
-            # Fetch range start to start+batch_size
             response = supabase.table(table_name).select("*").range(start, start + batch_size - 1).execute()
             rows = response.data
-            
-            if not rows:
-                break
-                
+            if not rows: break
             all_rows.extend(rows)
-            
-            if len(rows) < batch_size:
-                break  # Reached the end
-                
+            if len(rows) < batch_size: break
             start += batch_size
         except Exception as e:
             print(f"Error fetching {table_name}: {e}")
@@ -52,13 +48,11 @@ def fetch_all_rows(table_name):
     return pd.DataFrame(all_rows)
 
 # --- DATABASE UTILS ---
-def init_db():
-    pass
+def init_db(): pass
 
 def get_current_month_cost():
     try:
         current_month = datetime.now().strftime("%Y-%m")
-        # Just fetch logs for this month to sum cost
         res = supabase.table("update_logs").select("total_cost").ilike("run_date", f"{current_month}%").execute()
         total = sum(item['total_cost'] for item in res.data)
         return total
@@ -73,19 +67,13 @@ def get_live_usd_inr_rate():
     return 90.0
 
 def get_all_keywords():
-    # Use the new helper to get ALL keywords
     return fetch_all_rows("keywords_master")
 
 def add_keyword(exam, keyword, kw_type, cluster="", volume=0, target_url=""):
     try:
         res = supabase.table("keywords_master").select("*").eq("keyword", keyword).execute()
-        if res.data:
-            return False, f"Keyword '{keyword}' already exists."
-        
-        data = {
-            "exam": exam, "keyword": keyword, "type": kw_type,
-            "cluster": cluster, "volume": volume, "target_url": target_url
-        }
+        if res.data: return False, f"Keyword '{keyword}' already exists."
+        data = {"exam": exam, "keyword": keyword, "type": kw_type, "cluster": cluster, "volume": volume, "target_url": target_url}
         supabase.table("keywords_master").insert(data).execute()
         return True, "Success"
     except Exception as e: return False, str(e)
@@ -97,9 +85,7 @@ def delete_bulk_keywords(keyword_list):
     except: pass
 
 def clear_master_database():
-    try:
-        # Delete all rows (id > 0)
-        supabase.table("keywords_master").delete().gt("id", 0).execute()
+    try: supabase.table("keywords_master").delete().gt("id", 0).execute()
     except: pass
 
 def normalize_url(url):
@@ -108,44 +94,32 @@ def normalize_url(url):
 
 # --- EXCEL UPLOAD ---
 def process_bulk_upload(uploaded_file, mode="append"):
-    if mode == "replace_all":
-        clear_master_database()
-    
+    if mode == "replace_all": clear_master_database()
     try:
         xls = pd.ExcelFile(uploaded_file)
-        
         if mode == "replace_exam":
             for sheet in xls.sheet_names:
-                exam_name = sheet.strip()
-                try: supabase.table("keywords_master").delete().eq("exam", exam_name).execute()
+                try: supabase.table("keywords_master").delete().eq("exam", sheet.strip()).execute()
                 except: pass
 
         rows_to_insert = []
-        
         for sheet in xls.sheet_names:
             df = pd.read_excel(xls, sheet_name=sheet)
             df.columns = [str(col).strip() for col in df.columns]
             current_exam = sheet.strip()
-            
             for _, row in df.iterrows():
                 cluster = str(row.get('Cluster', '')).strip()
                 t_url = str(row.get('Page URLs', row.get('Page URL', row.get('Target URL', '')))).strip()
                 if t_url.lower() == 'nan': t_url = ""
                 if cluster.lower() == 'nan': cluster = ""
                 
-                # Primary
                 p_kw = str(row.get('Primary Keyword', '')).strip()
                 p_vol = row.get('Volume', 0)
                 try: p_vol = int(float(str(p_vol).replace(',', '')))
                 except: p_vol = 0
-                
                 if p_kw and p_kw.lower() != 'nan':
-                    rows_to_insert.append({
-                        "exam": current_exam, "keyword": p_kw, "type": "Primary",
-                        "cluster": cluster, "volume": p_vol, "target_url": t_url
-                    })
+                    rows_to_insert.append({"exam": current_exam, "keyword": p_kw, "type": "Primary", "cluster": cluster, "volume": p_vol, "target_url": t_url})
                 
-                # Secondary
                 sec_block = str(row.get('Secondary Keywords', ''))
                 if sec_block and sec_block.lower() != 'nan':
                     sec_kws = [k.strip() for k in sec_block.split('\n') if k.strip()]
@@ -155,20 +129,13 @@ def process_bulk_upload(uploaded_file, mode="append"):
                         for v in vol_block.split('\n'):
                             try: sec_vols.append(int(float(str(v).replace(',', '').strip())))
                             except: sec_vols.append(0)
-                    
                     for i, s_kw in enumerate(sec_kws):
                         s_vol = sec_vols[i] if i < len(sec_vols) else 0
-                        rows_to_insert.append({
-                            "exam": current_exam, "keyword": s_kw, "type": "Secondary",
-                            "cluster": cluster, "volume": s_vol, "target_url": t_url
-                        })
+                        rows_to_insert.append({"exam": current_exam, "keyword": s_kw, "type": "Secondary", "cluster": cluster, "volume": s_vol, "target_url": t_url})
 
         if rows_to_insert:
-            chunk_size = 1000
-            for i in range(0, len(rows_to_insert), chunk_size):
-                chunk = rows_to_insert[i:i+chunk_size]
-                supabase.table("keywords_master").insert(chunk).execute()
-        
+            for i in range(0, len(rows_to_insert), 1000):
+                supabase.table("keywords_master").insert(rows_to_insert[i:i+1000]).execute()
         return True, f"Success! Processed {len(rows_to_insert)} keywords."
     except Exception as e: return False, f"Error: {str(e)}"
 
@@ -176,12 +143,8 @@ def process_bulk_upload(uploaded_file, mode="append"):
 def fetch_rank_single(item):
     keyword = item['keyword']
     target_url = item.get('target_url', '')
-    
     url = "https://api.dataforseo.com/v3/serp/google/organic/live/advanced"
-    payload = [{
-        "keyword": keyword, "location_code": 2356, "language_code": "en",
-        "device": "mobile", "os": "android", "depth": 20 
-    }]
+    payload = [{"keyword": keyword, "location_code": 2356, "language_code": "en", "device": "mobile", "os": "android", "depth": 20}]
     auth = "Basic " + base64.b64encode(f"{API_LOGIN}:{API_PASSWORD}".encode()).decode()
     headers = {'Authorization': auth, 'Content-Type': 'application/json'}
 
@@ -202,7 +165,6 @@ def fetch_rank_single(item):
                 items = data['tasks'][0]['result'][0]['items']
                 best, best_url, target_f = 101, "Not Ranked", 101
                 clean_t = normalize_url(target_url)
-                
                 comp_found = {k: 101 for k in COMPETITORS.keys()}
                 comp_urls_found = {k: "" for k in COMPETITORS.keys()}
 
@@ -220,22 +182,17 @@ def fetch_rank_single(item):
                         for c_key, c_domain in COMPETITORS.items():
                             if c_domain in r_url:
                                 if grp < comp_found[c_key]:
-                                    comp_found[c_key] = grp
-                                    comp_urls_found[c_key] = r_url 
+                                    comp_found[c_key], comp_urls_found[c_key] = grp, r_url 
 
                 bucket = "B4 (>20)"
                 if best <= 3: bucket = "B1 (1-3)"
                 elif best <= 10: bucket = "B2 (4-10)"
                 elif best <= 20: bucket = "B3 (11-20)"
                 
-                res_data.update({
-                    'rank': best, 'url': best_url, 'bucket': bucket, 
-                    'target_rank': target_f, 'comp_ranks': comp_found, 'comp_urls': comp_urls_found
-                })
+                res_data.update({'rank': best, 'url': best_url, 'bucket': bucket, 'target_rank': target_f, 'comp_ranks': comp_found, 'comp_urls': comp_urls_found})
             except: pass
         else: res_data['url'] = f"Err: {data.get('status_message')}"
     except Exception as e: res_data['url'] = f"Err: {str(e)}"
-        
     return res_data
 
 # --- RUNNER ---
@@ -248,12 +205,10 @@ def perform_update(keywords_list, progress_bar=None, status_text=None):
 
     with ThreadPoolExecutor(max_workers=15) as executor:
         future_to_kw = {executor.submit(fetch_rank_single, item): item for item in keywords_list}
-        
         for future in as_completed(future_to_kw):
             res = future.result()
             total_run_cost += res['cost']
-            cr = res['comp_ranks']
-            cu = res['comp_urls']
+            cr = res['comp_ranks']; cu = res['comp_urls']
             
             row = {
                 "date": date_str, "keyword": res['keyword'], "exam": res['exam'], "type": res['type'], 
@@ -266,22 +221,73 @@ def perform_update(keywords_list, progress_bar=None, status_text=None):
                 "url_adda247": cu['adda247'], "url_ixambee": cu['ixambee']
             }
             results_to_save.append(row)
-            
             completed += 1
             if status_text: status_text.text(f"Processing... {completed}/{total}")
             if progress_bar: progress_bar.progress(completed / total)
             
     if results_to_save:
-        chunk_size = 500
-        for i in range(0, len(results_to_save), chunk_size):
-            chunk = results_to_save[i:i+chunk_size]
-            try: supabase.table("rankings").insert(chunk).execute()
+        for i in range(0, len(results_to_save), 500):
+            try: supabase.table("rankings").insert(results_to_save[i:i+500]).execute()
             except Exception as e: print(f"Error saving batch: {e}")
 
-    try:
-        supabase.table("update_logs").insert({
-            "run_date": date_str, "keywords_count": total, "total_cost": total_run_cost
-        }).execute()
+    try: supabase.table("update_logs").insert({"run_date": date_str, "keywords_count": total, "total_cost": total_run_cost}).execute()
     except: pass
 
     return date_str, total_run_cost
+
+# --- EMAIL ALERT SYSTEM ---
+def send_email_alert(alerts_dict):
+    if not any(alerts_dict.values()):
+        print("📭 No alerts to send.")
+        return
+
+    msg = MIMEMultipart()
+    msg['From'] = EMAIL_SENDER
+    msg['To'] = EMAIL_RECEIVER
+    msg['Subject'] = f"SEO Alert: Rank Changes Detected ({datetime.now().strftime('%d %b')})"
+
+    html_body = "<h2>📉 SEO Ranking Updates</h2>"
+    
+    # 🔴 RED: Out of Top 10
+    if alerts_dict["red"]:
+        html_body += "<h3 style='color:red;'>🔴 Critical: Dropped out of Top 10</h3>"
+        html_body += "<table border='1' cellpadding='5' style='border-collapse:collapse;'><tr><th>Keyword</th><th>Current</th><th>Previous</th></tr>"
+        for item in alerts_dict["red"]:
+            html_body += f"<tr><td>{item['kw']}</td><td>{item['curr']}</td><td>{item['prev']}</td></tr>"
+        html_body += "</table><br>"
+
+    # 🟠 ORANGE: Dropped 4+ Positions
+    if alerts_dict["orange"]:
+        html_body += "<h3 style='color:orange;'>🟠 Warning: Dropped 4+ Positions</h3>"
+        html_body += "<table border='1' cellpadding='5' style='border-collapse:collapse;'><tr><th>Keyword</th><th>Current</th><th>Previous</th></tr>"
+        for item in alerts_dict["orange"]:
+            html_body += f"<tr><td>{item['kw']}</td><td>{item['curr']}</td><td>{item['prev']}</td></tr>"
+        html_body += "</table><br>"
+
+    # 🟡 YELLOW: Out of Top 3
+    if alerts_dict["yellow"]:
+        html_body += "<h3 style='color:#b5b500;'>🟡 Alert: Dropped out of Top 3</h3>"
+        html_body += "<table border='1' cellpadding='5' style='border-collapse:collapse;'><tr><th>Keyword</th><th>Current</th><th>Previous</th></tr>"
+        for item in alerts_dict["yellow"]:
+            html_body += f"<tr><td>{item['kw']}</td><td>{item['curr']}</td><td>{item['prev']}</td></tr>"
+        html_body += "</table><br>"
+
+    # 🟢 GREEN: Entered Top 3
+    if alerts_dict["green"]:
+        html_body += "<h3 style='color:green;'>🟢 Celebration: Entered Top 3!</h3>"
+        html_body += "<table border='1' cellpadding='5' style='border-collapse:collapse;'><tr><th>Keyword</th><th>Current</th><th>Previous</th></tr>"
+        for item in alerts_dict["green"]:
+            html_body += f"<tr><td>{item['kw']}</td><td>{item['curr']}</td><td>{item['prev']}</td></tr>"
+        html_body += "</table><br>"
+
+    msg.attach(MIMEText(html_body, 'html'))
+
+    try:
+        server = smtplib.SMTP('smtp.gmail.com', 587)
+        server.starttls()
+        server.login(EMAIL_SENDER, EMAIL_PASSWORD)
+        server.sendmail(EMAIL_SENDER, EMAIL_RECEIVER, msg.as_string())
+        server.quit()
+        print("📧 Email Alert Sent Successfully!")
+    except Exception as e:
+        print(f"❌ Failed to send email: {e}")
