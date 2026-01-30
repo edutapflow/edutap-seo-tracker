@@ -1,4 +1,4 @@
-# FORCE UPDATE V8 - SEPARATE PASSWORDS
+# FORCE UPDATE V8 - UI FIX
 import streamlit as st
 import pandas as pd
 from datetime import datetime, timedelta
@@ -7,7 +7,7 @@ from backend_utils import perform_update, get_all_keywords, add_keyword, delete_
 
 st.set_page_config(page_title="EduTap SEO Tracker", layout="wide")
 
-# --- 🔒 LOGIN SECURITY (Main App Access) ---
+# --- 🔒 LOGIN SECURITY ---
 if 'logged_in' not in st.session_state: st.session_state['logged_in'] = False
 
 def check_password():
@@ -73,7 +73,7 @@ def get_dashboard_view(master_df, history_df):
             return "Not in Top 20" if v > 20 else v
 
         disp_curr = fmt_rank(curr); disp_prev = fmt_rank(prev)
-        disp_t_curr = fmt_rank(t_rank_val); disp_t_prev = fmt_rank(101) # Simplified for display
+        disp_t_curr = fmt_rank(t_rank_val); disp_t_prev = fmt_rank(101) 
         c_val = int(curr) if pd.notna(curr) else 101
         p_val = int(prev) if pd.notna(prev) else 101
         
@@ -117,12 +117,13 @@ def categorize_cluster(row):
     return "Others"
 
 # --- LAYOUT ---
-tab1, tab2, tab3, tab4, tab5 = st.tabs(["📊 Dashboard", "📈 Visual Trends", "🏆 Competitors", "🧩 P1/P2 Analysis", "📝 Manage DB"])
 col_header, col_btn = st.columns([6, 1])
 with col_header: st.title("📊 EduTap SEO Intelligence")
 with col_btn:
     st.write(""); st.write("") 
     if st.button("🔄 Refresh", help="Force update data"): st.cache_data.clear(); st.rerun()
+
+tab1, tab2, tab3, tab4, tab5 = st.tabs(["📊 Dashboard", "📈 Visual Trends", "🏆 Competitors", "🧩 P1/P2 Analysis", "📝 Manage DB"])
 
 with tab1:
     LOCK_ACTIVE = True; LIMIT_INR = 3500
