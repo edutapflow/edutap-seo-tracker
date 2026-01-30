@@ -26,13 +26,10 @@ COMPETITORS = {
     "ixambee": "ixambee.com"
 }
 
-# --- HELPER: FETCH ALL ROWS (NO LIMITS) ---
+# --- FETCHERS ---
 def fetch_all_rows(table_name):
-    """Fetches ALL rows from a Supabase table by pagination."""
     all_rows = []
-    start = 0
-    batch_size = 1000
-    
+    start = 0; batch_size = 1000
     while True:
         try:
             response = supabase.table(table_name).select("*").range(start, start + batch_size - 1).execute()
@@ -41,47 +38,39 @@ def fetch_all_rows(table_name):
             all_rows.extend(rows)
             if len(rows) < batch_size: break
             start += batch_size
-        except Exception as e:
-            print(f"Error fetching {table_name}: {e}")
-            break
-            
+        except Exception as e: break
     return pd.DataFrame(all_rows)
-
-# --- DATABASE UTILS ---
-def init_db(): pass
 
 def get_current_month_cost():
     try:
         current_month = datetime.now().strftime("%Y-%m")
         res = supabase.table("update_logs").select("total_cost").ilike("run_date", f"{current_month}%").execute()
-        total = sum(item['total_cost'] for item in res.data)
-        return total
+        return sum(item['total_cost'] for item in res.data)
     except: return 0.0
 
 def get_live_usd_inr_rate():
     try:
-        response = requests.get("https://api.exchangerate-api.com/v4/latest/USD", timeout=3)
-        if response.status_code == 200:
-            return float(response.json().get('rates', {}).get('INR', 90.0))
+        r = requests.get("https://api.exchangerate-api.com/v4/latest/USD", timeout=3)
+        if r.status_code == 200: return float(r.json().get('rates', {}).get('INR', 90.0))
     except: pass
     return 90.0
 
-def get_all_keywords():
-    return fetch_all_rows("keywords_master")
+def get_all_keywords(): return fetch_all_rows("keywords_master")
 
+# --- DB MANAGEMENT ---
 def add_keyword(exam, keyword, kw_type, cluster="", volume=0, target_url=""):
     try:
-        res = supabase.table("keywords_master").select("*").eq("keyword", keyword).execute()
-        if res.data: return False, f"Keyword '{keyword}' already exists."
-        data = {"exam": exam, "keyword": keyword, "type": kw_type, "cluster": cluster, "volume": volume, "target_url": target_url}
-        supabase.table("keywords_master").insert(data).execute()
+        if supabase.table("keywords_master").select("*").eq("keyword", keyword).execute().data:
+            return False, f"Keyword '{keyword}' already exists."
+        supabase.table("keywords_master").insert({
+            "exam": exam, "keyword": keyword, "type": kw_type, 
+            "cluster": cluster, "volume": volume, "target_url": target_url
+        }).execute()
         return True, "Success"
     except Exception as e: return False, str(e)
 
 def delete_bulk_keywords(keyword_list):
-    try:
-        if not keyword_list: return
-        supabase.table("keywords_master").delete().in_("keyword", keyword_list).execute()
+    try: supabase.table("keywords_master").delete().in_("keyword", keyword_list).execute()
     except: pass
 
 def clear_master_database():
@@ -89,10 +78,8 @@ def clear_master_database():
     except: pass
 
 def normalize_url(url):
-    if not url: return ""
-    return str(url).lower().replace("https://", "").replace("http://", "").replace("www.", "").strip("/")
+    return str(url).lower().replace("https://", "").replace("http://", "").replace("www.", "").strip("/") if url else ""
 
-# --- EXCEL UPLOAD ---
 def process_bulk_upload(uploaded_file, mode="append"):
     if mode == "replace_all": clear_master_database()
     try:
@@ -154,12 +141,10 @@ def fetch_rank_single(item):
         "comp_ranks": {k: 101 for k in COMPETITORS.keys()},
         "comp_urls": {k: "" for k in COMPETITORS.keys()}
     }
-
     try:
         response = requests.post(url, headers=headers, json=payload)
         data = response.json()
         res_data['cost'] = data.get('cost', 0)
-        
         if response.status_code == 200:
             try:
                 items = data['tasks'][0]['result'][0]['items']
@@ -173,12 +158,10 @@ def fetch_rank_single(item):
                         r_url = item.get('url', '')
                         clean_r = normalize_url(r_url)
                         grp = item['rank_group']
-                        
                         if TARGET_DOMAIN in r_url:
                             if grp < best: best, best_url = grp, r_url
                             if clean_t and clean_t in clean_r:
                                 if grp < target_f: target_f = grp
-                        
                         for c_key, c_domain in COMPETITORS.items():
                             if c_domain in r_url:
                                 if grp < comp_found[c_key]:
@@ -188,7 +171,6 @@ def fetch_rank_single(item):
                 if best <= 3: bucket = "B1 (1-3)"
                 elif best <= 10: bucket = "B2 (4-10)"
                 elif best <= 20: bucket = "B3 (11-20)"
-                
                 res_data.update({'rank': best, 'url': best_url, 'bucket': bucket, 'target_rank': target_f, 'comp_ranks': comp_found, 'comp_urls': comp_urls_found})
             except: pass
         else: res_data['url'] = f"Err: {data.get('status_message')}"
@@ -233,22 +215,26 @@ def perform_update(keywords_list, progress_bar=None, status_text=None):
     try: supabase.table("update_logs").insert({"run_date": date_str, "keywords_count": total, "total_cost": total_run_cost}).execute()
     except: pass
 
-    return date_str, total_run_cost
+    # RETURN DATA SO DASHBOARD CAN USE IT FOR ALERTS WITHOUT RE-FETCHING
+    return date_str, total_run_cost, results_to_save
 
 # --- EMAIL ALERT SYSTEM ---
-def send_email_alert(alerts_dict):
+def send_email_alert(alerts_dict, subject_prefix="Automatic Run"):
     if not any(alerts_dict.values()):
         print("📭 No alerts to send.")
         return
 
+    date_label = datetime.now().strftime('%d %b %Y')
+    
     msg = MIMEMultipart()
     msg['From'] = EMAIL_SENDER
     msg['To'] = EMAIL_RECEIVER
-    msg['Subject'] = f"SEO Alert: Rank Changes Detected ({datetime.now().strftime('%d %b')})"
+    msg['Subject'] = f"{subject_prefix}: SEO Alert ({date_label})"
 
-    html_body = "<h2>📉 SEO Ranking Updates</h2>"
+    html_body = f"<h2>📉 {subject_prefix} Report ({date_label})</h2>"
+    html_body += "<p>Here are the significant rank changes from this run:</p>"
     
-    # 🔴 RED: Out of Top 10
+    # 🔴 RED
     if alerts_dict["red"]:
         html_body += "<h3 style='color:red;'>🔴 Critical: Dropped out of Top 10</h3>"
         html_body += "<table border='1' cellpadding='5' style='border-collapse:collapse;'><tr><th>Keyword</th><th>Current</th><th>Previous</th></tr>"
@@ -256,7 +242,7 @@ def send_email_alert(alerts_dict):
             html_body += f"<tr><td>{item['kw']}</td><td>{item['curr']}</td><td>{item['prev']}</td></tr>"
         html_body += "</table><br>"
 
-    # 🟠 ORANGE: Dropped 4+ Positions
+    # 🟠 ORANGE
     if alerts_dict["orange"]:
         html_body += "<h3 style='color:orange;'>🟠 Warning: Dropped 4+ Positions</h3>"
         html_body += "<table border='1' cellpadding='5' style='border-collapse:collapse;'><tr><th>Keyword</th><th>Current</th><th>Previous</th></tr>"
@@ -264,7 +250,7 @@ def send_email_alert(alerts_dict):
             html_body += f"<tr><td>{item['kw']}</td><td>{item['curr']}</td><td>{item['prev']}</td></tr>"
         html_body += "</table><br>"
 
-    # 🟡 YELLOW: Out of Top 3
+    # 🟡 YELLOW
     if alerts_dict["yellow"]:
         html_body += "<h3 style='color:#b5b500;'>🟡 Alert: Dropped out of Top 3</h3>"
         html_body += "<table border='1' cellpadding='5' style='border-collapse:collapse;'><tr><th>Keyword</th><th>Current</th><th>Previous</th></tr>"
@@ -272,7 +258,7 @@ def send_email_alert(alerts_dict):
             html_body += f"<tr><td>{item['kw']}</td><td>{item['curr']}</td><td>{item['prev']}</td></tr>"
         html_body += "</table><br>"
 
-    # 🟢 GREEN: Entered Top 3
+    # 🟢 GREEN
     if alerts_dict["green"]:
         html_body += "<h3 style='color:green;'>🟢 Celebration: Entered Top 3!</h3>"
         html_body += "<table border='1' cellpadding='5' style='border-collapse:collapse;'><tr><th>Keyword</th><th>Current</th><th>Previous</th></tr>"
