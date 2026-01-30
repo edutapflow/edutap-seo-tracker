@@ -1,24 +1,9 @@
-# FORCE UPDATE V6 - PARENTHESES FIX
+# FORCE UPDATE V7 - FLATTENED IMPORTS (BULLETPROOF)
 import streamlit as st
 import pandas as pd
 from datetime import datetime, timedelta
 import altair as alt
-
-# --- SAFE IMPORTS (Wrapped to prevent IndentationError) ---
-from backend_utils import (
-    perform_update, 
-    get_all_keywords, 
-    add_keyword, 
-    delete_bulk_keywords, 
-    process_bulk_upload, 
-    normalize_url, 
-    get_current_month_cost, 
-    get_live_usd_inr_rate, 
-    clear_master_database, 
-    supabase, 
-    fetch_all_rows, 
-    send_email_alert
-)
+from backend_utils import perform_update, get_all_keywords, add_keyword, delete_bulk_keywords, process_bulk_upload, normalize_url, get_current_month_cost, get_live_usd_inr_rate, clear_master_database, supabase, fetch_all_rows, send_email_alert
 
 st.set_page_config(page_title="EduTap SEO Tracker", layout="wide")
 
