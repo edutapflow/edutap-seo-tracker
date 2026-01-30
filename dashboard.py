@@ -1,4 +1,4 @@
-# FORCE UPDATE V7 - FLATTENED IMPORTS (BULLETPROOF)
+# FORCE UPDATE V8 - SEPARATE PASSWORDS
 import streamlit as st
 import pandas as pd
 from datetime import datetime, timedelta
@@ -7,7 +7,7 @@ from backend_utils import perform_update, get_all_keywords, add_keyword, delete_
 
 st.set_page_config(page_title="EduTap SEO Tracker", layout="wide")
 
-# --- 🔒 LOGIN SECURITY ---
+# --- 🔒 LOGIN SECURITY (Main App Access) ---
 if 'logged_in' not in st.session_state: st.session_state['logged_in'] = False
 
 def check_password():
@@ -233,18 +233,19 @@ with tab1:
             if st.session_state.get('show_run_dialog'):
                 with st.form("run_conf_form"):
                     st.write("🔒 **Confirm Manual Update**")
-                    run_pass = st.text_input("Enter Admin Password:", type="password")
+                    run_pass = st.text_input("Enter Admin Run Password:", type="password")
                     c1, c2 = st.columns(2)
                     submit = c1.form_submit_button("✅ Confirm & Run")
                     cancel = c2.form_submit_button("❌ Cancel")
                     
                     if submit:
-                        if run_pass == st.secrets["APP_PASSWORD"]:
+                        # --- UPDATED: CHECKS NEW SECRET HERE ---
+                        if run_pass == st.secrets["RUN_UPDATE_PASSWORD"]:
                             st.session_state['pending_update_list'] = df.to_dict('records')
                             st.session_state['prev_map_snapshot'] = prev_rank_map
                             st.session_state['is_running'] = True
                             st.rerun()
-                        else: st.error("Wrong Password")
+                        else: st.error("Wrong Run Password")
                     
                     if cancel:
                         st.session_state['show_run_dialog'] = False
