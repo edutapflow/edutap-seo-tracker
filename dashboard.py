@@ -7,6 +7,11 @@ from backend_utils import perform_update, get_all_keywords, add_keyword, delete_
 
 st.set_page_config(page_title="EduTap SEO Tracker", layout="wide")
 
+# --- 🔄 REFRESH BUTTON ---
+if st.sidebar.button("🔄 Force Refresh Data"):
+    st.cache_data.clear()
+    st.rerun()
+
 # --- 🔒 SECURITY LAYER (LOGIN SCREEN) ---
 if 'logged_in' not in st.session_state:
     st.session_state['logged_in'] = False
@@ -505,3 +510,4 @@ with tab5:
             cl = c4.text_input("Cluster"); v = c5.number_input("Vol"); u = c6.text_input("URL")
             if st.form_submit_button("Add"):
                 add_keyword(e,k,t,cl,v,u); st.success("Added"); st.rerun()
+
