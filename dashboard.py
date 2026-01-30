@@ -2,7 +2,6 @@ import streamlit as st
 import pandas as pd
 from datetime import datetime, timedelta
 import altair as alt
-# Import the new 'fetch_all_rows' helper
 from backend_utils import perform_update, get_all_keywords, add_keyword, delete_bulk_keywords, init_db, process_bulk_upload, normalize_url, get_current_month_cost, get_live_usd_inr_rate, clear_master_database, supabase, fetch_all_rows
 
 st.set_page_config(page_title="EduTap SEO Tracker", layout="wide")
@@ -12,32 +11,25 @@ if 'logged_in' not in st.session_state:
     st.session_state['logged_in'] = False
 
 def check_password():
-    """Returns `True` if the user had the correct password."""
     def password_entered():
-        """Checks whether a password entered by the user is correct."""
         if st.session_state["password"] == st.secrets["APP_PASSWORD"]:
             st.session_state["logged_in"] = True
-            del st.session_state["password"]  # don't store password
+            del st.session_state["password"]
         else:
             st.session_state["logged_in"] = False
 
-    if st.session_state['logged_in']:
-        return True
+    if st.session_state['logged_in']: return True
 
     st.markdown("### 🔒 Private Access Only")
-    st.text_input(
-        "Enter Password:", type="password", on_change=password_entered, key="password"
-    )
+    st.text_input("Enter Password:", type="password", on_change=password_entered, key="password")
     if "password" in st.session_state and not st.session_state['logged_in']:
         st.error("😕 Password incorrect")
-    
     return st.session_state['logged_in']
 
-if not check_password():
-    st.stop()  # 🛑 STOPS HERE if not logged in
+if not check_password(): st.stop()
 
 # =========================================================
-# 🚀 MAIN DASHBOARD APP (Only loads if password is correct)
+# 🚀 MAIN DASHBOARD APP
 # =========================================================
 
 if 'is_running' not in st.session_state: st.session_state['is_running'] = False
@@ -46,14 +38,12 @@ if 'last_run_cost' not in st.session_state: st.session_state['last_run_cost'] = 
 
 COMPETITORS_LIST = ["anujjindal", "careerpower", "testbook", "oliveboard", "adda247", "ixambee"]
 
-# --- CLOUD FETCHERS (WITH PAGINATION) ---
+# --- CLOUD FETCHERS ---
 @st.cache_data(ttl=600) 
-def get_ranking_data():
-    return fetch_all_rows("rankings")
+def get_ranking_data(): return fetch_all_rows("rankings")
 
 @st.cache_data(ttl=600)
-def get_master_data():
-    return fetch_all_rows("keywords_master")
+def get_master_data(): return fetch_all_rows("keywords_master")
 
 @st.cache_data(show_spinner=False)
 def get_dashboard_view(master_df, history_df):
@@ -88,57 +78,41 @@ def get_dashboard_view(master_df, history_df):
         t_url = str(row.get('target_url', ''))
         t_rank_val = row.get('Target Rank Found', 101)
         
-        clean_r = normalize_url(r_url)
-        clean_t = normalize_url(t_url)
+        clean_r = normalize_url(r_url); clean_t = normalize_url(t_url)
 
         def fmt_rank(val):
             try: v = int(val)
             except: v = 101
             return "Not in Top 20" if v > 20 else v
 
-        disp_curr = fmt_rank(curr)
-        disp_prev = fmt_rank(prev)
-        disp_t_curr = fmt_rank(t_rank_val)
-        disp_t_prev = fmt_rank(prev_t)
+        disp_curr = fmt_rank(curr); disp_prev = fmt_rank(prev)
+        disp_t_curr = fmt_rank(t_rank_val); disp_t_prev = fmt_rank(prev_t)
 
         c_val = int(curr) if pd.notna(curr) else 101
         p_val = int(prev) if pd.notna(prev) else 101
         
         alert_status = "Normal"
-        if c_val > 10 and p_val <= 10: alert_status = "🔴 Dropped Out of Top 10"
-        elif (c_val - p_val) >= 4: alert_status = "🟠 Dropped 4+ Pos"
-        elif c_val > 3 and p_val <= 3: alert_status = "🟡 Dropped Out of Top 3"
-        elif c_val <= 3 and p_val > 3: alert_status = "🟢 Entered Top 3"
+        if p_val <= 10 and c_val > 10: alert_status = "🔴 Out of Top 10"
+        elif (c_val - p_val) >= 4: alert_status = "🟠 Dropped 4+"
+        elif p_val <= 3 and c_val > 3: alert_status = "🟡 Out of Top 3"
+        elif p_val > 3 and c_val <= 3: alert_status = "🟢 Entered Top 3"
 
         if not t_url or t_url.lower() in ["nan", "none", ""]:
-            status = "⚠️ Target Not Set"
-            display_t_url = None
-            disp_t_curr = "-"
-            disp_t_prev = "-"
+            status = "⚠️ Target Not Set"; display_t_url = None; disp_t_curr = "-"; disp_t_prev = "-"
         else:
             display_t_url = t_url
-            if c_val > 20: 
-                status = "❌ Not Ranked"
-                r_url = None
-            elif clean_t and clean_t in clean_r: 
-                status = "✅ Matched"
-            else: 
-                status = "⚠️ Mismatch"
+            if c_val > 20: status = "❌ Not Ranked"; r_url = None
+            elif clean_t and clean_t in clean_r: status = "✅ Matched"
+            else: status = "⚠️ Mismatch"
 
-        if not r_url or r_url.lower() in ["nan", "no data"] or "Err" in r_url:
-            r_url = None
-
+        if not r_url or r_url.lower() in ["nan", "no data"] or "Err" in r_url: r_url = None
         last_upd = row.get('last_updated', '-')
         if pd.notna(last_upd):
              try: last_upd = str(last_upd).split(' ')[0]
              except: pass
+        bucket = row.get('bucket', 'Pending') if pd.notna(row.get('bucket')) else 'Pending'
 
-        bucket = row.get('bucket', 'Pending')
-        if pd.isna(bucket): bucket = 'Pending'
-
-        return pd.Series([
-            alert_status, status, disp_curr, disp_prev, r_url, display_t_url, disp_t_curr, disp_t_prev, last_upd, bucket
-        ])
+        return pd.Series([alert_status, status, disp_curr, disp_prev, r_url, display_t_url, disp_t_curr, disp_t_prev, last_upd, bucket])
 
     new_cols = ['Alert', 'Keyword Check', 'Ranked URL Rank', 'Ranked URL Pre. Rank', 'Ranked URL', 'Target URL', 'Target URL Rank', 'Target URL Pre. Rank', 'Last Updated', 'Bucket']
     merged_df[new_cols] = merged_df.apply(process_row, axis=1)
@@ -161,21 +135,14 @@ def categorize_cluster(row):
         if k in cluster: return "P2"
     return "Others"
 
-# --- TABS ---
+# --- LAYOUT ---
 tab1, tab2, tab3, tab4, tab5 = st.tabs(["📊 Dashboard", "📈 Visual Trends", "🏆 Competitors", "🧩 P1/P2 Analysis", "📝 Manage DB"])
 
-# --- SHARED HEADER WITH SMALL REFRESH BUTTON ---
 col_header, col_btn = st.columns([6, 1])
-
-with col_header:
-    st.title("📊 EduTap SEO Intelligence")
-
+with col_header: st.title("📊 EduTap SEO Intelligence")
 with col_btn:
-    st.write("") # Spacer to push button down
-    st.write("") 
-    if st.button("🔄 Refresh", help="Force update data from Cloud"):
-        st.cache_data.clear()
-        st.rerun()
+    st.write(""); st.write("") 
+    if st.button("🔄 Refresh", help="Force update data"): st.cache_data.clear(); st.rerun()
 
 with tab1:
     LOCK_ACTIVE = True; LIMIT_INR = 3500
@@ -219,7 +186,7 @@ with tab1:
         def standardize_cluster(name):
             n = name.lower()
             if "admit card" in n: return "Admit Card"
-            if "cut off" in n or "cutoff" in n: return "Cut Off"
+            if "cut off" in n: return "Cut Off"
             if "job profile" in n: return "Job Profile"
             if "pyq" in n: return "PYQ"
             if "result" in n: return "Result"
@@ -261,9 +228,7 @@ with tab1:
                 else: base_count = len(final_view[final_view['type'] == sel_type]); base_lbl = f"Total '{sel_type}'"
             else: base_lbl = "Total (All Types)"
 
-        sel_count = len(df)
-        pct = (sel_count/base_count*100) if base_count>0 else 0
-        
+        sel_count = len(df); pct = (sel_count/base_count*100) if base_count>0 else 0
         with c_mode2:
             m1, m2, m3 = st.columns(3)
             m1.metric("Selected Keywords", sel_count)
@@ -292,17 +257,7 @@ with tab1:
             return [''] * len(row)
 
         cols = ["Alert", "exam", "cluster", "keyword", "type", "Keyword Check", "Ranked URL", "Ranked URL Rank", "Ranked URL Pre. Rank", "Target URL", "Target URL Rank", "Target URL Pre. Rank", "Volume", "Last Updated"]
-        
-        st.dataframe(
-            df[cols].style.apply(highlight_alert, axis=1),
-            use_container_width=True, hide_index=True,
-            column_config={
-                "exam": "Exam", "cluster": "Cluster", "keyword": "Keyword", "type": "Type",
-                "Ranked URL": st.column_config.LinkColumn("Ranked URL", display_text=r"https?://[^/]+(/.*)"),
-                "Target URL": st.column_config.LinkColumn("Target URL", display_text=r"https?://[^/]+(/.*)"),
-                "Volume": st.column_config.NumberColumn("Volume", format="%d")
-            }
-        )
+        st.dataframe(df[cols].style.apply(highlight_alert, axis=1), use_container_width=True, hide_index=True, column_config={"Ranked URL": st.column_config.LinkColumn(display_text=r"https?://[^/]+(/.*)"), "Target URL": st.column_config.LinkColumn(display_text=r"https?://[^/]+(/.*)"), "Volume": st.column_config.NumberColumn(format="%d")})
 
 with tab2:
     st.title("📈 Keyword Rank Trends")
@@ -310,115 +265,64 @@ with tab2:
     else:
         kws = sorted(history_df['keyword'].unique())
         sel_k = st.multiselect("Select Keyword(s):", kws)
-        
         c1, c2 = st.columns(2)
         today = datetime.now().date()
         start_d = c1.date_input("Start Date", today - timedelta(days=30))
         end_d = c2.date_input("End Date", today)
-        
         if sel_k:
             chart_data = history_df[history_df['keyword'].isin(sel_k)].copy()
             chart_data['date_dt'] = pd.to_datetime(chart_data['date'])
-            chart_data = chart_data[
-                (chart_data['date_dt'].dt.date >= start_d) & 
-                (chart_data['date_dt'].dt.date <= end_d)
-            ]
-            
-            if chart_data.empty:
-                st.warning("No data for this date range.")
+            chart_data = chart_data[(chart_data['date_dt'].dt.date >= start_d) & (chart_data['date_dt'].dt.date <= end_d)]
+            if chart_data.empty: st.warning("No data for this date range.")
             else:
                 chart_data['Day'] = chart_data['date_dt'].dt.date
                 chart_data = chart_data.sort_values('date_dt').groupby(['keyword', 'Day'], as_index=False).last()
-                
                 chart_data['Plot Rank'] = chart_data['rank'].apply(lambda x: x if x <= 20 else 21)
-                c = alt.Chart(chart_data).mark_line(point=True).encode(
-                    x=alt.X('Day:T', axis=alt.Axis(format='%b %d')), 
-                    y=alt.Y('Plot Rank:Q', scale=alt.Scale(domain=[21, 1], reverse=True)),
-                    color='keyword:N', tooltip=['Day', 'keyword', 'rank']
-                ).interactive()
+                c = alt.Chart(chart_data).mark_line(point=True).encode(x=alt.X('Day:T', axis=alt.Axis(format='%b %d')), y=alt.Y('Plot Rank:Q', scale=alt.Scale(domain=[21, 1], reverse=True)), color='keyword:N', tooltip=['Day', 'keyword', 'rank']).interactive()
                 st.altair_chart(c, use_container_width=True)
         else: st.info("Select a keyword.")
 
 with tab3:
     st.title("🏆 Competitor Analysis")
-    
     if history_df.empty or master_df.empty: st.info("No data.")
     else:
         history_clean = history_df.drop(columns=['exam', 'type'], errors='ignore')
-        merged_history = pd.merge(
-            history_clean, 
-            master_df[['keyword', 'exam', 'type']], 
-            on='keyword', 
-            how='inner'
-        )
-
+        merged_history = pd.merge(history_clean, master_df[['keyword', 'exam', 'type']], on='keyword', how='inner')
         f_c1, f_c2 = st.columns(2)
         avail_exams = sorted(merged_history['exam'].unique())
         avail_types = sorted(merged_history['type'].unique())
-        
         sel_comp_exam = f_c1.multiselect("Filter by Exam:", avail_exams, placeholder="All Exams")
         sel_comp_type = f_c2.selectbox("Filter by Type:", ["All"] + avail_types)
-        
-        if sel_comp_exam:
-            merged_history = merged_history[merged_history['exam'].isin(sel_comp_exam)]
-        if sel_comp_type != "All":
-            merged_history = merged_history[merged_history['type'] == sel_comp_type]
-
-        if merged_history.empty:
-            st.warning("No data matches the selected filters.")
+        if sel_comp_exam: merged_history = merged_history[merged_history['exam'].isin(sel_comp_exam)]
+        if sel_comp_type != "All": merged_history = merged_history[merged_history['type'] == sel_comp_type]
+        if merged_history.empty: st.warning("No data.")
         else:
             merged_history['date_dt'] = pd.to_datetime(merged_history['date'])
             latest_comp = merged_history.sort_values('date_dt').groupby('keyword').tail(1).copy()
-            
             st.subheader("1. Head-to-Head Comparison")
             comp_cols = ["keyword", "rank"] + [f"rank_{c}" for c in COMPETITORS_LIST] + [f"url_{c}" for c in COMPETITORS_LIST]
             disp_comp = latest_comp[comp_cols].copy()
-            
             for c in COMPETITORS_LIST:
-                r_col = f"rank_{c}"
-                u_col = f"url_{c}"
-                disp_name = c.title()
-                
+                r_col = f"rank_{c}"; u_col = f"url_{c}"; disp_name = c.title()
                 def make_link(row):
-                    r = row.get(r_col)
-                    u = row.get(u_col)
-                    try: r_val = int(r)
+                    try: r_val = int(row.get(r_col))
                     except: r_val = 101
-                    if r_val <= 20 and u: return f"{u}?rank_display={r_val}" 
+                    if r_val <= 20 and row.get(u_col): return f"{row.get(u_col)}?rank_display={r_val}" 
                     return "Not in Top 20"
-
                 disp_comp[disp_name] = disp_comp.apply(make_link, axis=1)
-
             disp_comp = disp_comp.rename(columns={"rank": "EduTap"})
-            final_cols = ["keyword", "EduTap"] + [c.title() for c in COMPETITORS_LIST]
-            disp_comp = disp_comp[final_cols]
-            
-            col_cfg = {}
-            for c in COMPETITORS_LIST:
-                col_cfg[c.title()] = st.column_config.LinkColumn(
-                    c.title(), display_text=r"rank_display=(\d+)"
-                )
-
-            st.dataframe(
-                disp_comp, 
-                use_container_width=True, 
-                hide_index=True,
-                column_config=col_cfg
-            )
-
+            st.dataframe(disp_comp[["keyword", "EduTap"] + [c.title() for c in COMPETITORS_LIST]], use_container_width=True, hide_index=True, column_config={c.title(): st.column_config.LinkColumn(display_text=r"rank_display=(\d+)") for c in COMPETITORS_LIST})
             st.subheader("2. Consistent Outrankers (Last 4 Updates)")
             counts = merged_history['keyword'].value_counts()
             valid_kws = counts[counts >= 4].index
-            if len(valid_kws) == 0: st.info("Need 4 updates for selected keywords.")
+            if len(valid_kws) == 0: st.info("Need 4 updates.")
             else:
                 outrank_data = []
                 valid_hist = merged_history[merged_history['keyword'].isin(valid_kws)].sort_values('date_dt')
                 for k, grp in valid_hist.groupby('keyword'):
                     last_4 = grp.tail(4)
                     for comp in COMPETITORS_LIST:
-                        col = f"rank_{comp}"
-                        wins = 0
-                        cur_edu = last_4.iloc[-1]['rank']
+                        col = f"rank_{comp}"; wins = 0; cur_edu = last_4.iloc[-1]['rank']
                         try: cur_comp = int(last_4.iloc[-1][col])
                         except: cur_comp = 101
                         for _, r in last_4.iterrows():
@@ -426,10 +330,9 @@ with tab3:
                             try: c_r = int(r[col])
                             except: pass
                             if c_r <= 20 and c_r < e: wins += 1
-                        if wins == 4:
-                            outrank_data.append({"Keyword": k, "Competitor": comp.title(), "EduTap Rank": cur_edu if cur_edu<=20 else "20+", "Comp Rank": cur_comp})
+                        if wins == 4: outrank_data.append({"Keyword": k, "Competitor": comp.title(), "EduTap Rank": cur_edu if cur_edu<=20 else "20+", "Comp Rank": cur_comp})
                 if outrank_data: st.dataframe(pd.DataFrame(outrank_data), use_container_width=True)
-                else: st.info("No consistent outrankers found in filtered data.")
+                else: st.info("No consistent outrankers.")
 
 with tab4:
     st.title("🧩 P1 vs P2 Cluster Analysis")
@@ -445,10 +348,7 @@ with tab4:
             clean_p = merged_p[(merged_p['Category'] != "Others") & (merged_p['exam'].isin(sel_e))]
             if clean_p.empty: st.warning("No P1/P2 data.")
             else:
-                stats = clean_p.groupby(['exam', 'Category']).agg(
-                    Avg_Rank=('rank', lambda x: x[x<=20].mean()), 
-                    Top10=('rank', lambda x: (x<=10).sum())
-                ).reset_index()
+                stats = clean_p.groupby(['exam', 'Category']).agg(Avg_Rank=('rank', lambda x: x[x<=20].mean()), Top10=('rank', lambda x: (x<=10).sum())).reset_index()
                 stats['Avg_Rank'] = stats['Avg_Rank'].fillna(0).round(1)
                 for ex in stats['exam'].unique():
                     st.markdown(f"#### {ex}")
@@ -464,31 +364,12 @@ with tab5:
     c1.metric("Exams", master_df['exam'].nunique())
     c2.metric("Keywords", len(master_df))
     st.divider()
-    
-    # --- INTERACTIVE EDITOR FOR DELETION ---
     if not master_df.empty:
-        # Add Select Column
-        editable_df = master_df.copy()
-        editable_df.insert(0, "Select", False)
-        
-        # Display Editor
-        edited_df = st.data_editor(
-            editable_df,
-            hide_index=True,
-            column_config={"Select": st.column_config.CheckboxColumn(required=True)},
-            disabled=["exam", "keyword", "type", "cluster", "volume", "target_url"],
-            use_container_width=True
-        )
-        
-        # Delete Action
+        editable_df = master_df.copy(); editable_df.insert(0, "Select", False)
+        edited_df = st.data_editor(editable_df, hide_index=True, column_config={"Select": st.column_config.CheckboxColumn(required=True)}, disabled=["exam", "keyword", "type", "cluster", "volume", "target_url"], use_container_width=True)
         rows_to_delete = edited_df[edited_df["Select"] == True]
-        if not rows_to_delete.empty:
-            if st.button(f"🗑️ Delete Selected ({len(rows_to_delete)})", type="primary"):
-                delete_bulk_keywords(rows_to_delete['keyword'].tolist())
-                get_master_data.clear()
-                st.success("Deleted!")
-                st.rerun()
-    
+        if not rows_to_delete.empty and st.button(f"🗑️ Delete Selected ({len(rows_to_delete)})", type="primary"):
+            delete_bulk_keywords(rows_to_delete['keyword'].tolist()); get_master_data.clear(); st.success("Deleted!"); st.rerun()
     st.divider()
     tb, tm = st.tabs(["📂 Bulk Upload", "➕ Add"])
     with tb:
@@ -499,14 +380,12 @@ with tab5:
         if f and st.button("Process"):
             if "Append" in m: s,t = process_bulk_upload(f, "append")
             elif "Replace Exam" in m:
-                # Direct supabase delete for exam
                 if wipe:
                     for e in wipe: 
                         try: supabase.table("keywords_master").delete().eq("exam", e).execute()
                         except: pass
                 s,t = process_bulk_upload(f, "append")
             else: s,t = process_bulk_upload(f, "replace_all")
-            
             if s: st.success(t); get_master_data.clear(); st.rerun()
             else: st.error(t)
     with tm:
