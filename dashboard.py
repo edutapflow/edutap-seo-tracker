@@ -7,6 +7,39 @@ from backend_utils import perform_update, get_all_keywords, add_keyword, delete_
 
 st.set_page_config(page_title="EduTap SEO Tracker", layout="wide")
 
+# --- 🔒 SECURITY LAYER (LOGIN SCREEN) ---
+if 'logged_in' not in st.session_state:
+    st.session_state['logged_in'] = False
+
+def check_password():
+    """Returns `True` if the user had the correct password."""
+    def password_entered():
+        """Checks whether a password entered by the user is correct."""
+        if st.session_state["password"] == st.secrets["APP_PASSWORD"]:
+            st.session_state["logged_in"] = True
+            del st.session_state["password"]  # don't store password
+        else:
+            st.session_state["logged_in"] = False
+
+    if st.session_state['logged_in']:
+        return True
+
+    st.markdown("### 🔒 Private Access Only")
+    st.text_input(
+        "Enter Password:", type="password", on_change=password_entered, key="password"
+    )
+    if "password" in st.session_state and not st.session_state['logged_in']:
+        st.error("😕 Password incorrect")
+    
+    return st.session_state['logged_in']
+
+if not check_password():
+    st.stop()  # 🛑 STOPS HERE if not logged in
+
+# =========================================================
+# 🚀 MAIN DASHBOARD APP (Only loads if password is correct)
+# =========================================================
+
 if 'is_running' not in st.session_state: st.session_state['is_running'] = False
 if 'last_run_date' not in st.session_state: st.session_state['last_run_date'] = None
 if 'last_run_cost' not in st.session_state: st.session_state['last_run_cost'] = None
@@ -16,12 +49,10 @@ COMPETITORS_LIST = ["anujjindal", "careerpower", "testbook", "oliveboard", "adda
 # --- CLOUD FETCHERS (WITH PAGINATION) ---
 @st.cache_data(ttl=600) 
 def get_ranking_data():
-    # Use helper to get 100% of history
     return fetch_all_rows("rankings")
 
 @st.cache_data(ttl=600)
 def get_master_data():
-    # Use helper to get 100% of keywords
     return fetch_all_rows("keywords_master")
 
 @st.cache_data(show_spinner=False)
