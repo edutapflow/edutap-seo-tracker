@@ -1,4 +1,4 @@
-# FORCE UPDATE V5 - CONNECTION SAFETY
+# FORCE UPDATE V9 - IST TIMEZONE FIX
 import requests
 import time
 import pandas as pd
@@ -6,13 +6,13 @@ import base64
 import smtplib
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
-from datetime import datetime
+from datetime import datetime, timedelta
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from supabase import create_client, Client
 from config import API_LOGIN, API_PASSWORD, SUPABASE_URL, SUPABASE_KEY, EMAIL_SENDER, EMAIL_PASSWORD, EMAIL_RECEIVER
 
 # --- CONNECT TO CLOUD ---
-supabase = None # Define globally to prevent ImportError on failure
+supabase = None 
 
 try:
     if SUPABASE_URL and SUPABASE_KEY:
@@ -34,7 +34,7 @@ COMPETITORS = {
 
 # --- FETCHERS ---
 def fetch_all_rows(table_name):
-    if not supabase: return pd.DataFrame() # Return empty if no DB
+    if not supabase: return pd.DataFrame() 
     all_rows = []
     start = 0; batch_size = 1000
     while True:
@@ -191,7 +191,10 @@ def fetch_rank_single(item):
 
 # --- RUNNER ---
 def perform_update(keywords_list, progress_bar=None, status_text=None):
-    date_str = datetime.now().strftime("%Y-%m-%d %H:%M")
+    # FIX: Convert UTC to IST (+5:30)
+    ist_now = datetime.utcnow() + timedelta(hours=5, minutes=30)
+    date_str = ist_now.strftime("%Y-%m-%d %H:%M")
+    
     total = len(keywords_list)
     total_run_cost = 0.0
     completed = 0
@@ -237,7 +240,9 @@ def send_email_alert(alerts_dict, subject_prefix="Automatic Run"):
         print("📭 No alerts to send.")
         return
 
-    date_label = datetime.now().strftime('%d %b %Y')
+    # DATE IN IST
+    ist_now = datetime.utcnow() + timedelta(hours=5, minutes=30)
+    date_label = ist_now.strftime('%d %b %Y')
     
     msg = MIMEMultipart()
     msg['From'] = EMAIL_SENDER
@@ -290,4 +295,3 @@ def send_email_alert(alerts_dict, subject_prefix="Automatic Run"):
         print("📧 Email Alert Sent Successfully!")
     except Exception as e:
         print(f"❌ Failed to send email: {e}")
-
