@@ -1,4 +1,4 @@
-# FORCE UPDATE V3 - FINAL FIX
+# FORCE UPDATE V5 - CONNECTION SAFETY
 import requests
 import time
 import pandas as pd
@@ -12,8 +12,13 @@ from supabase import create_client, Client
 from config import API_LOGIN, API_PASSWORD, SUPABASE_URL, SUPABASE_KEY, EMAIL_SENDER, EMAIL_PASSWORD, EMAIL_RECEIVER
 
 # --- CONNECT TO CLOUD ---
+supabase = None # Define globally to prevent ImportError on failure
+
 try:
-    supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
+    if SUPABASE_URL and SUPABASE_KEY:
+        supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
+    else:
+        print("⚠️ Supabase Credentials Missing in Secrets")
 except Exception as e:
     print(f"Supabase Connection Error: {e}")
 
@@ -29,6 +34,7 @@ COMPETITORS = {
 
 # --- FETCHERS ---
 def fetch_all_rows(table_name):
+    if not supabase: return pd.DataFrame() # Return empty if no DB
     all_rows = []
     start = 0; batch_size = 1000
     while True:
@@ -43,6 +49,7 @@ def fetch_all_rows(table_name):
     return pd.DataFrame(all_rows)
 
 def get_current_month_cost():
+    if not supabase: return 0.0
     try:
         current_month = datetime.now().strftime("%Y-%m")
         res = supabase.table("update_logs").select("total_cost").ilike("run_date", f"{current_month}%").execute()
@@ -60,6 +67,7 @@ def get_all_keywords(): return fetch_all_rows("keywords_master")
 
 # --- DB MANAGEMENT ---
 def add_keyword(exam, keyword, kw_type, cluster="", volume=0, target_url=""):
+    if not supabase: return False, "Database not connected"
     try:
         if supabase.table("keywords_master").select("*").eq("keyword", keyword).execute().data:
             return False, f"Keyword '{keyword}' already exists."
@@ -71,10 +79,12 @@ def add_keyword(exam, keyword, kw_type, cluster="", volume=0, target_url=""):
     except Exception as e: return False, str(e)
 
 def delete_bulk_keywords(keyword_list):
+    if not supabase: return
     try: supabase.table("keywords_master").delete().in_("keyword", keyword_list).execute()
     except: pass
 
 def clear_master_database():
+    if not supabase: return
     try: supabase.table("keywords_master").delete().gt("id", 0).execute()
     except: pass
 
@@ -82,6 +92,7 @@ def normalize_url(url):
     return str(url).lower().replace("https://", "").replace("http://", "").replace("www.", "").strip("/") if url else ""
 
 def process_bulk_upload(uploaded_file, mode="append"):
+    if not supabase: return False, "Database not connected"
     if mode == "replace_all": clear_master_database()
     try:
         xls = pd.ExcelFile(uploaded_file)
@@ -208,12 +219,13 @@ def perform_update(keywords_list, progress_bar=None, status_text=None):
             if status_text: status_text.text(f"Processing... {completed}/{total}")
             if progress_bar: progress_bar.progress(completed / total)
             
-    if results_to_save:
+    if results_to_save and supabase:
         for i in range(0, len(results_to_save), 500):
             try: supabase.table("rankings").insert(results_to_save[i:i+500]).execute()
             except Exception as e: print(f"Error saving batch: {e}")
 
-    try: supabase.table("update_logs").insert({"run_date": date_str, "keywords_count": total, "total_cost": total_run_cost}).execute()
+    try: 
+        if supabase: supabase.table("update_logs").insert({"run_date": date_str, "keywords_count": total, "total_cost": total_run_cost}).execute()
     except: pass
 
     # RETURN DATA SO DASHBOARD CAN USE IT FOR ALERTS WITHOUT RE-FETCHING
@@ -221,60 +233,3 @@ def perform_update(keywords_list, progress_bar=None, status_text=None):
 
 # --- EMAIL ALERT SYSTEM ---
 def send_email_alert(alerts_dict, subject_prefix="Automatic Run"):
-    if not any(alerts_dict.values()):
-        print("📭 No alerts to send.")
-        return
-
-    date_label = datetime.now().strftime('%d %b %Y')
-    
-    msg = MIMEMultipart()
-    msg['From'] = EMAIL_SENDER
-    msg['To'] = EMAIL_RECEIVER
-    msg['Subject'] = f"{subject_prefix}: SEO Alert ({date_label})"
-
-    html_body = f"<h2>📉 {subject_prefix} Report ({date_label})</h2>"
-    html_body += "<p>Here are the significant rank changes from this run:</p>"
-    
-    # 🔴 RED
-    if alerts_dict["red"]:
-        html_body += "<h3 style='color:red;'>🔴 Critical: Dropped out of Top 10</h3>"
-        html_body += "<table border='1' cellpadding='5' style='border-collapse:collapse;'><tr><th>Keyword</th><th>Current</th><th>Previous</th></tr>"
-        for item in alerts_dict["red"]:
-            html_body += f"<tr><td>{item['kw']}</td><td>{item['curr']}</td><td>{item['prev']}</td></tr>"
-        html_body += "</table><br>"
-
-    # 🟠 ORANGE
-    if alerts_dict["orange"]:
-        html_body += "<h3 style='color:orange;'>🟠 Warning: Dropped 4+ Positions</h3>"
-        html_body += "<table border='1' cellpadding='5' style='border-collapse:collapse;'><tr><th>Keyword</th><th>Current</th><th>Previous</th></tr>"
-        for item in alerts_dict["orange"]:
-            html_body += f"<tr><td>{item['kw']}</td><td>{item['curr']}</td><td>{item['prev']}</td></tr>"
-        html_body += "</table><br>"
-
-    # 🟡 YELLOW
-    if alerts_dict["yellow"]:
-        html_body += "<h3 style='color:#b5b500;'>🟡 Alert: Dropped out of Top 3</h3>"
-        html_body += "<table border='1' cellpadding='5' style='border-collapse:collapse;'><tr><th>Keyword</th><th>Current</th><th>Previous</th></tr>"
-        for item in alerts_dict["yellow"]:
-            html_body += f"<tr><td>{item['kw']}</td><td>{item['curr']}</td><td>{item['prev']}</td></tr>"
-        html_body += "</table><br>"
-
-    # 🟢 GREEN
-    if alerts_dict["green"]:
-        html_body += "<h3 style='color:green;'>🟢 Celebration: Entered Top 3!</h3>"
-        html_body += "<table border='1' cellpadding='5' style='border-collapse:collapse;'><tr><th>Keyword</th><th>Current</th><th>Previous</th></tr>"
-        for item in alerts_dict["green"]:
-            html_body += f"<tr><td>{item['kw']}</td><td>{item['curr']}</td><td>{item['prev']}</td></tr>"
-        html_body += "</table><br>"
-
-    msg.attach(MIMEText(html_body, 'html'))
-
-    try:
-        server = smtplib.SMTP('smtp.gmail.com', 587)
-        server.starttls()
-        server.login(EMAIL_SENDER, EMAIL_PASSWORD)
-        server.sendmail(EMAIL_SENDER, EMAIL_RECEIVER, msg.as_string())
-        server.quit()
-        print("📧 Email Alert Sent Successfully!")
-    except Exception as e:
-        print(f"❌ Failed to send email: {e}")
