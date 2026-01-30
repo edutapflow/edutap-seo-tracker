@@ -1,0 +1,39 @@
+name: SEO Rank Update Robot
+
+on:
+  schedule:
+    # -------------------------------------------------------
+    # 🕒 CHANGE TIME HERE
+    # Syntax: 'minute hour day(month) month day(week)'
+    # UTC Time! (India is UTC+5:30)
+    # Currently set to: Every Monday at 04:30 UTC (10:00 AM IST)
+    # -------------------------------------------------------
+    - cron: '30 4 * * 1'
+  
+  # This allows you to run it manually from GitHub just to test
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v2
+
+      - name: Set up Python
+        uses: actions/setup-python@v2
+        with:
+          python-version: '3.9'
+
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt
+
+      - name: Run Update Script
+        env:
+          # We pass the secrets from GitHub to the script
+          API_LOGIN: ${{ secrets.API_LOGIN }}
+          API_PASSWORD: ${{ secrets.API_PASSWORD }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+        run: python cron_job.py
