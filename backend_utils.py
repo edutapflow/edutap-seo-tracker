@@ -233,3 +233,61 @@ def perform_update(keywords_list, progress_bar=None, status_text=None):
 
 # --- EMAIL ALERT SYSTEM ---
 def send_email_alert(alerts_dict, subject_prefix="Automatic Run"):
+    if not any(alerts_dict.values()):
+        print("📭 No alerts to send.")
+        return
+
+    date_label = datetime.now().strftime('%d %b %Y')
+    
+    msg = MIMEMultipart()
+    msg['From'] = EMAIL_SENDER
+    msg['To'] = EMAIL_RECEIVER
+    msg['Subject'] = f"{subject_prefix}: SEO Alert ({date_label})"
+
+    html_body = f"<h2>📉 {subject_prefix} Report ({date_label})</h2>"
+    html_body += "<p>Here are the significant rank changes from this run:</p>"
+    
+    # 🔴 RED
+    if alerts_dict["red"]:
+        html_body += "<h3 style='color:red;'>🔴 Critical: Dropped out of Top 10</h3>"
+        html_body += "<table border='1' cellpadding='5' style='border-collapse:collapse;'><tr><th>Keyword</th><th>Current</th><th>Previous</th></tr>"
+        for item in alerts_dict["red"]:
+            html_body += f"<tr><td>{item['kw']}</td><td>{item['curr']}</td><td>{item['prev']}</td></tr>"
+        html_body += "</table><br>"
+
+    # 🟠 ORANGE
+    if alerts_dict["orange"]:
+        html_body += "<h3 style='color:orange;'>🟠 Warning: Dropped 4+ Positions</h3>"
+        html_body += "<table border='1' cellpadding='5' style='border-collapse:collapse;'><tr><th>Keyword</th><th>Current</th><th>Previous</th></tr>"
+        for item in alerts_dict["orange"]:
+            html_body += f"<tr><td>{item['kw']}</td><td>{item['curr']}</td><td>{item['prev']}</td></tr>"
+        html_body += "</table><br>"
+
+    # 🟡 YELLOW
+    if alerts_dict["yellow"]:
+        html_body += "<h3 style='color:#b5b500;'>🟡 Alert: Dropped out of Top 3</h3>"
+        html_body += "<table border='1' cellpadding='5' style='border-collapse:collapse;'><tr><th>Keyword</th><th>Current</th><th>Previous</th></tr>"
+        for item in alerts_dict["yellow"]:
+            html_body += f"<tr><td>{item['kw']}</td><td>{item['curr']}</td><td>{item['prev']}</td></tr>"
+        html_body += "</table><br>"
+
+    # 🟢 GREEN
+    if alerts_dict["green"]:
+        html_body += "<h3 style='color:green;'>🟢 Celebration: Entered Top 3!</h3>"
+        html_body += "<table border='1' cellpadding='5' style='border-collapse:collapse;'><tr><th>Keyword</th><th>Current</th><th>Previous</th></tr>"
+        for item in alerts_dict["green"]:
+            html_body += f"<tr><td>{item['kw']}</td><td>{item['curr']}</td><td>{item['prev']}</td></tr>"
+        html_body += "</table><br>"
+
+    msg.attach(MIMEText(html_body, 'html'))
+
+    try:
+        server = smtplib.SMTP('smtp.gmail.com', 587)
+        server.starttls()
+        server.login(EMAIL_SENDER, EMAIL_PASSWORD)
+        server.sendmail(EMAIL_SENDER, EMAIL_RECEIVER, msg.as_string())
+        server.quit()
+        print("📧 Email Alert Sent Successfully!")
+    except Exception as e:
+        print(f"❌ Failed to send email: {e}")
+
