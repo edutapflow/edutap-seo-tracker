@@ -1,9 +1,17 @@
+import os
 import streamlit as st
 
-# Read secrets from Streamlit's secure vault
-API_LOGIN = st.secrets["API_LOGIN"]
-API_PASSWORD = st.secrets["API_PASSWORD"]
-SUPABASE_URL = st.secrets["SUPABASE_URL"]
-SUPABASE_KEY = st.secrets["SUPABASE_KEY"]
+def get_secret(key):
+    # 1. Try Streamlit Secrets (For the Dashboard)
+    try:
+        return st.secrets[key]
+    except (FileNotFoundError, KeyError, AttributeError):
+        # 2. Fallback to Environment Variables (For GitHub Actions Robot)
+        return os.environ.get(key)
+
+API_LOGIN = get_secret("API_LOGIN")
+API_PASSWORD = get_secret("API_PASSWORD")
+SUPABASE_URL = get_secret("SUPABASE_URL")
+SUPABASE_KEY = get_secret("SUPABASE_KEY")
 
 DB_NAME = "edutap_rankings.db"
