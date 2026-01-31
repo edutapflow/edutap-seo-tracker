@@ -135,7 +135,7 @@ with tab1:
     
     if LOCK_ACTIVE:
         c1, c2 = st.columns([3, 1])
-        c1.progress(min(max(spent_inr/LIMIT_INR, 0.0), 1.0), f"📉 Monthly Budget: ₹{spent_inr:,.0f} / ₹{LIMIT_INR:,.0f} (Rate: {USD_TO_INR:.1f})")
+        c1.progress(min(max(spent_inr/LIMIT_INR, 0.0), 1.0), f"📉 Monthly Budget: ₹{spent_inr:,.0f} / ₹{LIMIT_INR:,.0f}")
         if remaining_inr > 0: c2.success(f"✅ ₹{remaining_inr:,.0f} left")
         else: c2.error("⛔ Exceeded")
     else: st.warning("⚠️ Budget Lock Disabled")
@@ -404,3 +404,4 @@ with tab5:
             cl = c4.text_input("Cluster"); v = c5.number_input("Vol"); u = c6.text_input("URL")
             if st.form_submit_button("Add"):
                 add_keyword(e,k,t,cl,v,u); st.success("Added"); st.rerun()
+
