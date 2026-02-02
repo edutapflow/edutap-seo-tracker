@@ -1,4 +1,4 @@
-# FORCE UPDATE V13 - LOGIN UI FIX
+# FORCE UPDATE V14 - CLEAN FILTERS & P1/P2 TOTALS
 import streamlit as st
 import pandas as pd
 from datetime import datetime, timedelta
@@ -21,7 +21,6 @@ def check_password():
     st.markdown("### 🔒 Private Access Only")
     st.text_input("Enter Password:", type="password", on_change=password_entered, key="password")
     
-    # --- FIX: Only show error if password is NOT empty ---
     if "password" in st.session_state and st.session_state["password"] and not st.session_state['logged_in']: 
         st.error("😕 Password incorrect")
         
@@ -108,6 +107,7 @@ def categorize_cluster(row):
     exam = str(row['exam']).strip()
     cluster = str(row['cluster']).strip().lower()
     if not cluster: return "Others"
+    # --- LOGIC REMAIN SAME, JUST HELPER FUNCTION ---
     if exam in ["JAIIB", "CAIIB", "JAIIB/CAIIB"]:
         p1_keys = ["pillar", "syllabus", "exam date", "registration", "admit card", "pyq", "previous year"]
         p2_keys = ["pattern", "benefit", "eligibility", "scorecard", "certificate", "result", "preparation", "study material", "analysis", "topper"]
@@ -198,12 +198,22 @@ with tab1:
         st.divider()
         c_mode1, c_mode2 = st.columns([1, 3])
         with c_mode1: base_opt = st.radio("📊 Base for %:", ["Total Database", "Selected Exam Total", "Selected Type Total"])
+        
+        # --- FIX 2: NORMALIZE CLUSTERS (TITLE CASE) ---
         final_view['cluster'] = final_view['cluster'].fillna("").astype(str).str.strip().replace(['nan', 'None'], "")
-        final_view['cluster'] = final_view['cluster'].apply(lambda x: x if x else "Others")
+        final_view['cluster'] = final_view['cluster'].apply(lambda x: x.title() if x else "Others")
         
         f1, f2, f3, f4, f5 = st.columns(5)
+        
+        # Filter Logic
         sel_exam = f1.multiselect("Exam", sorted(final_view['exam'].unique()), placeholder="All Exams")
-        avail_clusters = sorted(final_view[final_view['exam'].isin(sel_exam)]['cluster'].unique()) if sel_exam else sorted(final_view['cluster'].unique())
+        
+        # --- FIX 2: DYNAMIC CLUSTER FILTER ---
+        if sel_exam:
+            avail_clusters = sorted(final_view[final_view['exam'].isin(sel_exam)]['cluster'].unique())
+        else:
+            avail_clusters = sorted(final_view['cluster'].unique())
+            
         sel_cluster = f2.multiselect("Cluster", avail_clusters, placeholder="All Clusters")
         sel_type = f3.selectbox("Type", ["All"] + sorted(final_view['type'].unique().tolist()))
         sel_check = f4.selectbox("Check", ["All"] + sorted(final_view['Keyword Check'].unique().tolist()))
@@ -287,24 +297,31 @@ with tab2:
     st.title("📈 Keyword Rank Trends")
     if history_df.empty: st.info("No history data yet.")
     else:
-        kws = sorted(history_df['keyword'].unique())
-        sel_k = st.multiselect("Select Keyword(s):", kws)
-        c1, c2 = st.columns(2)
-        today = datetime.now().date()
-        start_d = c1.date_input("Start Date", today - timedelta(days=30))
-        end_d = c2.date_input("End Date", today)
-        if sel_k:
-            chart_data = history_df[history_df['keyword'].isin(sel_k)].copy()
-            chart_data['date_dt'] = pd.to_datetime(chart_data['date'])
-            chart_data = chart_data[(chart_data['date_dt'].dt.date >= start_d) & (chart_data['date_dt'].dt.date <= end_d)]
-            if chart_data.empty: st.warning("No data for this date range.")
-            else:
-                chart_data['Day'] = chart_data['date_dt'].dt.date
-                chart_data = chart_data.sort_values('date_dt').groupby(['keyword', 'Day'], as_index=False).last()
-                chart_data['Plot Rank'] = chart_data['rank'].apply(lambda x: x if x <= 20 else 21)
-                c = alt.Chart(chart_data).mark_line(point=True).encode(x=alt.X('Day:T', axis=alt.Axis(format='%b %d')), y=alt.Y('Plot Rank:Q', scale=alt.Scale(domain=[21, 1], reverse=True)), color='keyword:N', tooltip=['Day', 'keyword', 'rank']).interactive()
-                st.altair_chart(c, use_container_width=True)
-        else: st.info("Select a keyword.")
+        # --- FIX 1: FILTER TO ONLY SHOW KEYWORDS THAT EXIST IN MASTER DB ---
+        valid_kws = set(master_df['keyword'].unique())
+        history_clean = history_df[history_df['keyword'].isin(valid_kws)]
+        
+        if history_clean.empty:
+            st.warning("No trend data matches current keyword list.")
+        else:
+            kws = sorted(history_clean['keyword'].unique())
+            sel_k = st.multiselect("Select Keyword(s):", kws)
+            c1, c2 = st.columns(2)
+            today = datetime.now().date()
+            start_d = c1.date_input("Start Date", today - timedelta(days=30))
+            end_d = c2.date_input("End Date", today)
+            if sel_k:
+                chart_data = history_clean[history_clean['keyword'].isin(sel_k)].copy()
+                chart_data['date_dt'] = pd.to_datetime(chart_data['date'])
+                chart_data = chart_data[(chart_data['date_dt'].dt.date >= start_d) & (chart_data['date_dt'].dt.date <= end_d)]
+                if chart_data.empty: st.warning("No data for this date range.")
+                else:
+                    chart_data['Day'] = chart_data['date_dt'].dt.date
+                    chart_data = chart_data.sort_values('date_dt').groupby(['keyword', 'Day'], as_index=False).last()
+                    chart_data['Plot Rank'] = chart_data['rank'].apply(lambda x: x if x <= 20 else 21)
+                    c = alt.Chart(chart_data).mark_line(point=True).encode(x=alt.X('Day:T', axis=alt.Axis(format='%b %d')), y=alt.Y('Plot Rank:Q', scale=alt.Scale(domain=[21, 1], reverse=True)), color='keyword:N', tooltip=['Day', 'keyword', 'rank']).interactive()
+                    st.altair_chart(c, use_container_width=True)
+            else: st.info("Select a keyword.")
 
 with tab3:
     st.title("🏆 Competitor Analysis")
@@ -376,13 +393,24 @@ with tab4:
             clean_p = merged_p[(merged_p['Category'] != "Others") & (merged_p['exam'].isin(sel_e))]
             if clean_p.empty: st.warning("No P1/P2 data.")
             else:
-                stats = clean_p.groupby(['exam', 'Category']).agg(Avg_Rank=('rank', lambda x: x[x<=20].mean()), Top10=('rank', lambda x: (x<=10).sum())).reset_index()
+                # --- FIX 3: ADD TOTAL KEYWORDS COUNT ---
+                stats = clean_p.groupby(['exam', 'Category']).agg(
+                    Total_Keywords=('keyword', 'count'),
+                    Avg_Rank=('rank', lambda x: x[x<=20].mean()), 
+                    Top10=('rank', lambda x: (x<=10).sum())
+                ).reset_index()
+                
                 stats['Avg_Rank'] = stats['Avg_Rank'].fillna(0).round(1)
+                
                 for ex in stats['exam'].unique():
                     st.markdown(f"#### {ex}")
                     d = stats[stats['exam'] == ex]
-                    st.table(d.pivot(index='Category', columns=[], values=['Avg_Rank', 'Top10']))
-                    c = alt.Chart(d).mark_bar().encode(x='Category', y='Top10', color='Category', tooltip=['Top10', 'Avg_Rank']).properties(height=200)
+                    
+                    # Display Table
+                    st.table(d.pivot(index='Category', columns=[], values=['Total_Keywords', 'Avg_Rank', 'Top10']))
+                    
+                    # Chart
+                    c = alt.Chart(d).mark_bar().encode(x='Category', y='Top10', color='Category', tooltip=['Total_Keywords', 'Top10', 'Avg_Rank']).properties(height=200)
                     st.altair_chart(c, use_container_width=True)
         else: st.info("Select exam.")
 
