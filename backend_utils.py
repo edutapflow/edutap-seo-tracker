@@ -1,4 +1,4 @@
-# FORCE UPDATE V9 - IST TIMEZONE FIX
+# FORCE UPDATE V11 - ALWAYS SEND EMAIL
 import requests
 import time
 import pandas as pd
@@ -236,21 +236,28 @@ def perform_update(keywords_list, progress_bar=None, status_text=None):
 
 # --- EMAIL ALERT SYSTEM ---
 def send_email_alert(alerts_dict, subject_prefix="Automatic Run"):
-    if not any(alerts_dict.values()):
-        print("📭 No alerts to send.")
-        return
-
+    # REMOVED the "if empty return" check so email is ALWAYS sent.
+    
     # DATE IN IST
     ist_now = datetime.utcnow() + timedelta(hours=5, minutes=30)
     date_label = ist_now.strftime('%d %b %Y')
     
+    has_alerts = any(alerts_dict.values())
+
     msg = MIMEMultipart()
     msg['From'] = EMAIL_SENDER
     msg['To'] = EMAIL_RECEIVER
-    msg['Subject'] = f"{subject_prefix}: SEO Alert ({date_label})"
-
-    html_body = f"<h2>📉 {subject_prefix} Report ({date_label})</h2>"
-    html_body += "<p>Here are the significant rank changes from this run:</p>"
+    
+    # DYNAMIC SUBJECT & BODY
+    if has_alerts:
+        msg['Subject'] = f"{subject_prefix}: SEO Alert ({date_label})"
+        html_body = f"<h2>📉 {subject_prefix} Report ({date_label})</h2>"
+        html_body += "<p>Here are the significant rank changes from this run:</p>"
+    else:
+        msg['Subject'] = f"{subject_prefix}: Update Complete - No Alerts ({date_label})"
+        html_body = f"<h2>✅ {subject_prefix} Completed ({date_label})</h2>"
+        html_body += "<p>The update ran successfully. No significant rank drops or critical changes were detected.</p>"
+        html_body += "<p>All monitored keywords remained stable within their previous buckets.</p>"
     
     # 🔴 RED
     if alerts_dict["red"]:
