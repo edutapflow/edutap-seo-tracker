@@ -1,4 +1,4 @@
-# FORCE UPDATE V10 - COMPETITOR TAB 101 FIX
+# FORCE UPDATE V9 - MANUAL REPORT PASSING
 import streamlit as st
 import pandas as pd
 from datetime import datetime, timedelta
@@ -151,19 +151,31 @@ with tab1:
             # Run Update
             r_date, r_cost, results_data = perform_update(kws, bar, txt)
             
-            # Generate Alerts
+            # Generate Alerts & Full Data for Report
             alerts = {"red": [], "orange": [], "yellow": [], "green": []}
+            all_checked_data = []
+
             for row in results_data:
                 kw = row['keyword']
                 curr_rank = row['rank']
                 prev_rank = prev_map.get(kw, 101) 
+                
+                # Save for Full Report
+                all_checked_data.append({'kw': kw, 'curr': curr_rank, 'prev': prev_rank})
+
                 if curr_rank > 100 and prev_rank > 100: continue
-                if prev_rank <= 10 and curr_rank > 10: alerts["red"].append({"kw": kw, "curr": curr_rank, "prev": prev_rank})
-                elif (curr_rank - prev_rank) >= 4: alerts["orange"].append({"kw": kw, "curr": curr_rank, "prev": prev_rank})
-                elif prev_rank <= 3 and curr_rank > 3: alerts["yellow"].append({"kw": kw, "curr": curr_rank, "prev": prev_rank})
-                elif prev_rank > 3 and curr_rank <= 3: alerts["green"].append({"kw": kw, "curr": curr_rank, "prev": prev_rank})
+
+                if prev_rank <= 10 and curr_rank > 10:
+                    alerts["red"].append({"kw": kw, "curr": curr_rank, "prev": prev_rank})
+                elif (curr_rank - prev_rank) >= 4:
+                    alerts["orange"].append({"kw": kw, "curr": curr_rank, "prev": prev_rank})
+                elif prev_rank <= 3 and curr_rank > 3:
+                    alerts["yellow"].append({"kw": kw, "curr": curr_rank, "prev": prev_rank})
+                elif prev_rank > 3 and curr_rank <= 3:
+                    alerts["green"].append({"kw": kw, "curr": curr_rank, "prev": prev_rank})
             
-            send_email_alert(alerts, subject_prefix="🛠️ Manual Run")
+            # PASS 'all_checked_data' SO IT CAN BE PRINTED IF NO ALERTS
+            send_email_alert(alerts, subject_prefix="🛠️ Manual Run", all_checked_data=all_checked_data)
             
             st.session_state['last_run_date'] = r_date; st.session_state['last_run_cost'] = r_cost
             st.session_state['is_running'] = False
