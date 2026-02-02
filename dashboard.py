@@ -1,4 +1,4 @@
-# FORCE UPDATE V8 - UI FIX
+# FORCE UPDATE V10 - COMPETITOR TAB 101 FIX
 import streamlit as st
 import pandas as pd
 from datetime import datetime, timedelta
@@ -135,7 +135,7 @@ with tab1:
     
     if LOCK_ACTIVE:
         c1, c2 = st.columns([3, 1])
-        c1.progress(min(max(spent_inr/LIMIT_INR, 0.0), 1.0), f"📉 Monthly Budget: ₹{spent_inr:,.0f} / ₹{LIMIT_INR:,.0f}")
+        c1.progress(min(max(spent_inr/LIMIT_INR, 0.0), 1.0), f"📉 Monthly Budget: ₹{spent_inr:,.0f} / ₹{LIMIT_INR:,.0f} (Rate: {USD_TO_INR:.1f})")
         if remaining_inr > 0: c2.success(f"✅ ₹{remaining_inr:,.0f} left")
         else: c2.error("⛔ Exceeded")
     else: st.warning("⚠️ Budget Lock Disabled")
@@ -319,6 +319,10 @@ with tab3:
                     return "Not in Top 20"
                 disp_comp[disp_name] = disp_comp.apply(make_link, axis=1)
             disp_comp = disp_comp.rename(columns={"rank": "EduTap"})
+            
+            # --- FIX: Convert "101" to "Not in Top 20" for EduTap column ---
+            disp_comp['EduTap'] = disp_comp['EduTap'].apply(lambda x: "Not in Top 20" if x > 20 else x)
+
             st.dataframe(disp_comp[["keyword", "EduTap"] + [c.title() for c in COMPETITORS_LIST]], use_container_width=True, hide_index=True, column_config={c.title(): st.column_config.LinkColumn(display_text=r"rank_display=(\d+)") for c in COMPETITORS_LIST})
             st.subheader("2. Consistent Outrankers (Last 4 Updates)")
             counts = merged_history['keyword'].value_counts()
@@ -404,4 +408,3 @@ with tab5:
             cl = c4.text_input("Cluster"); v = c5.number_input("Vol"); u = c6.text_input("URL")
             if st.form_submit_button("Add"):
                 add_keyword(e,k,t,cl,v,u); st.success("Added"); st.rerun()
-
