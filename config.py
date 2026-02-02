@@ -18,8 +18,9 @@ SUPABASE_KEY = get_secret("SUPABASE_KEY")
 # Email Config
 EMAIL_SENDER = get_secret("EMAIL_SENDER")
 EMAIL_PASSWORD = get_secret("EMAIL_PASSWORD")
-EMAIL_RECEIVER = "rohit.sharma@edutap.co.in, extrastuff0980@gmail.com" 
+EMAIL_RECEIVER = "rohit.sharma@edutap.co.in, deepak.garg@edutap.co.in" 
 
 # Database Name
 DB_NAME = "edutap_rankings.db"
+
 
