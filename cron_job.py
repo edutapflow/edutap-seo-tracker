@@ -1,3 +1,4 @@
+# FORCE UPDATE V4 - MATCHES NEW EMAIL FUNCTION
 import pandas as pd
 from backend_utils import perform_update, fetch_all_rows, send_email_alert
 
@@ -27,7 +28,7 @@ def run_automation():
     keywords_list = master_df.to_dict('records')
     date_str, cost, results_data = perform_update(keywords_list, progress_bar=None, status_text=None)
     
-    # 4. Compare using the returned data directly (No need to re-fetch)
+    # 4. Compare
     alerts = {"red": [], "orange": [], "yellow": [], "green": []}
 
     for row in results_data:
@@ -46,9 +47,9 @@ def run_automation():
         elif prev_rank > 3 and curr_rank <= 3:
             alerts["green"].append({"kw": kw, "curr": curr_rank, "prev": prev_rank})
 
-    # 5. Send Email (With "Weekly" Label)
+    # 5. Send Email (Pass None for checked_data so it doesn't print the huge list on auto runs)
     print("   ... Sending Email Alert")
-    send_email_alert(alerts, subject_prefix="📅 Weekly Automatic Run")
+    send_email_alert(alerts, subject_prefix="📅 Weekly Automatic Run", all_checked_data=None)
     
     print(f"✅ Robot: Update Complete & Email Sent! Cost: ${cost:.4f}")
 
