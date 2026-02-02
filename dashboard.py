@@ -1,4 +1,4 @@
-# FORCE UPDATE V9 - MANUAL REPORT PASSING
+# FORCE UPDATE V13 - LOGIN UI FIX
 import streamlit as st
 import pandas as pd
 from datetime import datetime, timedelta
@@ -20,7 +20,11 @@ def check_password():
     if st.session_state['logged_in']: return True
     st.markdown("### 🔒 Private Access Only")
     st.text_input("Enter Password:", type="password", on_change=password_entered, key="password")
-    if "password" in st.session_state and not st.session_state['logged_in']: st.error("😕 Password incorrect")
+    
+    # --- FIX: Only show error if password is NOT empty ---
+    if "password" in st.session_state and st.session_state["password"] and not st.session_state['logged_in']: 
+        st.error("😕 Password incorrect")
+        
     return st.session_state['logged_in']
 
 if not check_password(): st.stop()
