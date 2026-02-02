@@ -1,4 +1,4 @@
-# FORCE UPDATE V11 - ALWAYS SEND EMAIL
+# FORCE UPDATE V12 - SMART ALERTS & MULTI-EMAIL
 import requests
 import time
 import pandas as pd
@@ -191,7 +191,6 @@ def fetch_rank_single(item):
 
 # --- RUNNER ---
 def perform_update(keywords_list, progress_bar=None, status_text=None):
-    # FIX: Convert UTC to IST (+5:30)
     ist_now = datetime.utcnow() + timedelta(hours=5, minutes=30)
     date_str = ist_now.strftime("%Y-%m-%d %H:%M")
     
@@ -231,65 +230,78 @@ def perform_update(keywords_list, progress_bar=None, status_text=None):
         if supabase: supabase.table("update_logs").insert({"run_date": date_str, "keywords_count": total, "total_cost": total_run_cost}).execute()
     except: pass
 
-    # RETURN DATA SO DASHBOARD CAN USE IT FOR ALERTS WITHOUT RE-FETCHING
     return date_str, total_run_cost, results_to_save
 
-# --- EMAIL ALERT SYSTEM ---
-def send_email_alert(alerts_dict, subject_prefix="Automatic Run"):
-    # REMOVED the "if empty return" check so email is ALWAYS sent.
-    
-    # DATE IN IST
+# --- SMART EMAIL SYSTEM ---
+def send_email_alert(alerts_dict, subject_prefix="Automatic Run", all_checked_data=None):
+    # Split receivers by comma (Handles multiple emails)
+    if "," in EMAIL_RECEIVER:
+        recipients = [e.strip() for e in EMAIL_RECEIVER.split(",")]
+    else:
+        recipients = [EMAIL_RECEIVER]
+
     ist_now = datetime.utcnow() + timedelta(hours=5, minutes=30)
     date_label = ist_now.strftime('%d %b %Y')
     
     has_alerts = any(alerts_dict.values())
+    is_manual = "Manual" in subject_prefix or "manual" in subject_prefix.lower()
 
     msg = MIMEMultipart()
     msg['From'] = EMAIL_SENDER
-    msg['To'] = EMAIL_RECEIVER
+    msg['To'] = ", ".join(recipients)
     
-    # DYNAMIC SUBJECT & BODY
+    # 1. IF ALERTS EXIST (Red/Orange/Yellow/Green) -> SHOW THEM
     if has_alerts:
         msg['Subject'] = f"{subject_prefix}: SEO Alert ({date_label})"
         html_body = f"<h2>📉 {subject_prefix} Report ({date_label})</h2>"
         html_body += "<p>Here are the significant rank changes from this run:</p>"
+        
+        if alerts_dict["red"]:
+            html_body += "<h3 style='color:red;'>🔴 Critical: Dropped out of Top 10</h3>"
+            html_body += "<table border='1' cellpadding='5' style='border-collapse:collapse;'><tr><th>Keyword</th><th>Current</th><th>Previous</th></tr>"
+            for item in alerts_dict["red"]:
+                html_body += f"<tr><td>{item['kw']}</td><td>{item['curr']}</td><td>{item['prev']}</td></tr>"
+            html_body += "</table><br>"
+
+        if alerts_dict["orange"]:
+            html_body += "<h3 style='color:orange;'>🟠 Warning: Dropped 4+ Positions</h3>"
+            html_body += "<table border='1' cellpadding='5' style='border-collapse:collapse;'><tr><th>Keyword</th><th>Current</th><th>Previous</th></tr>"
+            for item in alerts_dict["orange"]:
+                html_body += f"<tr><td>{item['kw']}</td><td>{item['curr']}</td><td>{item['prev']}</td></tr>"
+            html_body += "</table><br>"
+
+        if alerts_dict["yellow"]:
+            html_body += "<h3 style='color:#b5b500;'>🟡 Alert: Dropped out of Top 3</h3>"
+            html_body += "<table border='1' cellpadding='5' style='border-collapse:collapse;'><tr><th>Keyword</th><th>Current</th><th>Previous</th></tr>"
+            for item in alerts_dict["yellow"]:
+                html_body += f"<tr><td>{item['kw']}</td><td>{item['curr']}</td><td>{item['prev']}</td></tr>"
+            html_body += "</table><br>"
+
+        if alerts_dict["green"]:
+            html_body += "<h3 style='color:green;'>🟢 Celebration: Entered Top 3!</h3>"
+            html_body += "<table border='1' cellpadding='5' style='border-collapse:collapse;'><tr><th>Keyword</th><th>Current</th><th>Previous</th></tr>"
+            for item in alerts_dict["green"]:
+                html_body += f"<tr><td>{item['kw']}</td><td>{item['curr']}</td><td>{item['prev']}</td></tr>"
+            html_body += "</table><br>"
+
+    # 2. IF NO ALERTS + MANUAL RUN -> SHOW FULL REPORT
+    elif is_manual and all_checked_data:
+        msg['Subject'] = f"{subject_prefix}: Report Completed ({date_label})"
+        html_body = f"<h2>✅ Manual Run Completed ({date_label})</h2>"
+        html_body += "<p>No significant alerts detected. Here is the full status of keywords checked:</p>"
+        html_body += "<table border='1' cellpadding='5' style='border-collapse:collapse;'><tr><th>Keyword</th><th>Current</th><th>Previous</th></tr>"
+        for item in all_checked_data:
+            c = item['curr'] if item['curr'] <= 20 else "Not in Top 20"
+            p = item['prev'] if item['prev'] <= 100 else "Unknown"
+            html_body += f"<tr><td>{item['kw']}</td><td>{c}</td><td>{p}</td></tr>"
+        html_body += "</table><br>"
+
+    # 3. IF NO ALERTS + AUTOMATIC RUN -> SHORT MESSAGE
     else:
-        msg['Subject'] = f"{subject_prefix}: Update Complete - No Alerts ({date_label})"
-        html_body = f"<h2>✅ {subject_prefix} Completed ({date_label})</h2>"
+        msg['Subject'] = f"{subject_prefix}: All Stable ({date_label})"
+        html_body = f"<h2>✅ Automatic Update Completed ({date_label})</h2>"
         html_body += "<p>The update ran successfully. No significant rank drops or critical changes were detected.</p>"
         html_body += "<p>All monitored keywords remained stable within their previous buckets.</p>"
-    
-    # 🔴 RED
-    if alerts_dict["red"]:
-        html_body += "<h3 style='color:red;'>🔴 Critical: Dropped out of Top 10</h3>"
-        html_body += "<table border='1' cellpadding='5' style='border-collapse:collapse;'><tr><th>Keyword</th><th>Current</th><th>Previous</th></tr>"
-        for item in alerts_dict["red"]:
-            html_body += f"<tr><td>{item['kw']}</td><td>{item['curr']}</td><td>{item['prev']}</td></tr>"
-        html_body += "</table><br>"
-
-    # 🟠 ORANGE
-    if alerts_dict["orange"]:
-        html_body += "<h3 style='color:orange;'>🟠 Warning: Dropped 4+ Positions</h3>"
-        html_body += "<table border='1' cellpadding='5' style='border-collapse:collapse;'><tr><th>Keyword</th><th>Current</th><th>Previous</th></tr>"
-        for item in alerts_dict["orange"]:
-            html_body += f"<tr><td>{item['kw']}</td><td>{item['curr']}</td><td>{item['prev']}</td></tr>"
-        html_body += "</table><br>"
-
-    # 🟡 YELLOW
-    if alerts_dict["yellow"]:
-        html_body += "<h3 style='color:#b5b500;'>🟡 Alert: Dropped out of Top 3</h3>"
-        html_body += "<table border='1' cellpadding='5' style='border-collapse:collapse;'><tr><th>Keyword</th><th>Current</th><th>Previous</th></tr>"
-        for item in alerts_dict["yellow"]:
-            html_body += f"<tr><td>{item['kw']}</td><td>{item['curr']}</td><td>{item['prev']}</td></tr>"
-        html_body += "</table><br>"
-
-    # 🟢 GREEN
-    if alerts_dict["green"]:
-        html_body += "<h3 style='color:green;'>🟢 Celebration: Entered Top 3!</h3>"
-        html_body += "<table border='1' cellpadding='5' style='border-collapse:collapse;'><tr><th>Keyword</th><th>Current</th><th>Previous</th></tr>"
-        for item in alerts_dict["green"]:
-            html_body += f"<tr><td>{item['kw']}</td><td>{item['curr']}</td><td>{item['prev']}</td></tr>"
-        html_body += "</table><br>"
 
     msg.attach(MIMEText(html_body, 'html'))
 
@@ -297,7 +309,7 @@ def send_email_alert(alerts_dict, subject_prefix="Automatic Run"):
         server = smtplib.SMTP('smtp.gmail.com', 587)
         server.starttls()
         server.login(EMAIL_SENDER, EMAIL_PASSWORD)
-        server.sendmail(EMAIL_SENDER, EMAIL_RECEIVER, msg.as_string())
+        server.sendmail(EMAIL_SENDER, recipients, msg.as_string())
         server.quit()
         print("📧 Email Alert Sent Successfully!")
     except Exception as e:
