@@ -39,4 +39,4 @@ jobs:
           # --- ADDED THESE MISSING LINES BELOW ---
           EMAIL_SENDER: ${{ secrets.EMAIL_SENDER }}
           EMAIL_PASSWORD: ${{ secrets.EMAIL_PASSWORD }}
-        run: python cron_job.py
+        run: python wipe_history.py
