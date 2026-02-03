@@ -6,7 +6,7 @@ on:
     # 🕒 CHANGE TIME HERE
     # Syntax: 'minute hour day(month) month day(week)'
     # UTC Time! (India is UTC+5:30)
-    # Currently set to: Every Monday at 04:30 UTC (10:00 AM IST)
+    # Currently set to: Every Tuesday at 02:30 UTC (08:00 AM IST)
     # -------------------------------------------------------
     - cron: '30 2 * * 2'
   
@@ -36,4 +36,7 @@ jobs:
           API_PASSWORD: ${{ secrets.API_PASSWORD }}
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+          # --- ADDED THESE MISSING LINES BELOW ---
+          EMAIL_SENDER: ${{ secrets.EMAIL_SENDER }}
+          EMAIL_PASSWORD: ${{ secrets.EMAIL_PASSWORD }}
         run: python cron_job.py
