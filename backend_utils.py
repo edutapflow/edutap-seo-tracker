@@ -1,4 +1,4 @@
-# FORCE UPDATE V16 - DOUBLE CHECK LOGIC & EMAIL FIX
+# FORCE UPDATE V18 - SMART CHECK (ONLY DOUBLE CHECK FAILURES)
 import requests
 import time
 import pandas as pd
@@ -138,13 +138,15 @@ def process_bulk_upload(uploaded_file, mode="append"):
         return True, f"Success! Processed {len(rows_to_insert)} keywords."
     except Exception as e: return False, f"Error: {str(e)}"
 
-# --- API SCRAPER (WITH DOUBLE CHECK) ---
+# --- API SCRAPER (SMART DOUBLE CHECK) ---
 def fetch_rank_single(item):
     keyword = item['keyword']
     target_url = item.get('target_url', '')
     
+    # ⚠️ IF YOU WANT TO CHANGE LOCATION, CHANGE '2356' TO '9184262' HERE
     url = "https://api.dataforseo.com/v3/serp/google/organic/live/advanced"
     payload = [{"keyword": keyword, "location_code": 2356, "language_code": "en", "device": "mobile", "os": "android", "depth": 20}]
+    
     auth = "Basic " + base64.b64encode(f"{API_LOGIN}:{API_PASSWORD}".encode()).decode()
     headers = {'Authorization': auth, 'Content-Type': 'application/json'}
 
@@ -164,7 +166,7 @@ def fetch_rank_single(item):
             response = requests.post(url, headers=headers, json=payload)
             data = response.json()
             
-            # Accumulate cost from this attempt
+            # Accumulate cost
             this_cost = data.get('cost', 0)
             accumulated_cost += this_cost
             
@@ -182,13 +184,11 @@ def fetch_rank_single(item):
                             clean_r = normalize_url(r_url)
                             grp = item_res['rank_group']
                             
-                            # Check EduTap
                             if TARGET_DOMAIN in r_url:
                                 if grp < best: best, best_url = grp, r_url
                                 if clean_t and clean_t in clean_r:
                                     if grp < target_f: target_f = grp
                             
-                            # Check Competitors
                             for c_key, c_domain in COMPETITORS.items():
                                 if c_domain in r_url:
                                     if grp < comp_found[c_key]:
@@ -204,21 +204,19 @@ def fetch_rank_single(item):
             else: res_data['url'] = f"Err: {data.get('status_message')}"
         except Exception as e: res_data['url'] = f"Err: {str(e)}"
 
-        # DECISION TIME
+        # 🧠 SMART LOGIC:
+        # If we found a rank <= 20, we trust it. STOP immediately.
         if res_data['rank'] <= 20:
-            # FOUND IT! Return immediately.
             res_data['cost'] = accumulated_cost
             return res_data
         
-        # If we are here, rank > 20.
-        # Store this result. If it's the last attempt, we will return it.
-        res_data['cost'] = accumulated_cost
+        # If Rank > 20 (Fail), we store this result and loop to Try #2.
         final_res = res_data
         
-        # If attempt 1 failed, we loop again to double check.
-        if attempt == 1:
-            time.sleep(0.5) # Tiny pause before retry
+        if attempt == 1: time.sleep(0.5)
 
+    # If we finished loop and still haven't returned, return the result of the last attempt.
+    final_res['cost'] = accumulated_cost
     return final_res
 
 # --- RUNNER ---
