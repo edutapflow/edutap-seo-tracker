@@ -145,7 +145,7 @@ def fetch_rank_single(item):
     
     # ⚠️ IF YOU WANT TO CHANGE LOCATION, CHANGE '2356' TO '9184262' HERE
     url = "https://api.dataforseo.com/v3/serp/google/organic/live/advanced"
-    payload = [{"keyword": keyword, "location_code": 2356, "language_code": "en", "device": "mobile", "os": "android", "depth": 20}]
+    payload = [{"keyword": keyword, "location_code": 9184262, "language_code": "en", "device": "mobile", "os": "android", "depth": 20}]
     
     auth = "Basic " + base64.b64encode(f"{API_LOGIN}:{API_PASSWORD}".encode()).decode()
     headers = {'Authorization': auth, 'Content-Type': 'application/json'}
@@ -345,3 +345,4 @@ def send_email_alert(alerts_dict, subject_prefix="Automatic Run", all_checked_da
         print("📧 Email Alert Sent Successfully!")
     except Exception as e:
         print(f"❌ Failed to send email: {e}")
+
