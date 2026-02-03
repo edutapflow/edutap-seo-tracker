@@ -1,4 +1,4 @@
-# FORCE UPDATE V12 - SMART ALERTS & MULTI-EMAIL
+# FORCE UPDATE V16 - DOUBLE CHECK LOGIC & EMAIL FIX
 import requests
 import time
 import pandas as pd
@@ -138,56 +138,88 @@ def process_bulk_upload(uploaded_file, mode="append"):
         return True, f"Success! Processed {len(rows_to_insert)} keywords."
     except Exception as e: return False, f"Error: {str(e)}"
 
-# --- API SCRAPER ---
+# --- API SCRAPER (WITH DOUBLE CHECK) ---
 def fetch_rank_single(item):
     keyword = item['keyword']
     target_url = item.get('target_url', '')
+    
     url = "https://api.dataforseo.com/v3/serp/google/organic/live/advanced"
     payload = [{"keyword": keyword, "location_code": 2356, "language_code": "en", "device": "mobile", "os": "android", "depth": 20}]
     auth = "Basic " + base64.b64encode(f"{API_LOGIN}:{API_PASSWORD}".encode()).decode()
     headers = {'Authorization': auth, 'Content-Type': 'application/json'}
 
-    res_data = {
-        "keyword": keyword, "exam": item['exam'], "type": item['type'],
-        "rank": 101, "url": "No Data", "bucket": "B4 (>20)", "target_rank": 101, "cost": 0,
-        "comp_ranks": {k: 101 for k in COMPETITORS.keys()},
-        "comp_urls": {k: "" for k in COMPETITORS.keys()}
-    }
-    try:
-        response = requests.post(url, headers=headers, json=payload)
-        data = response.json()
-        res_data['cost'] = data.get('cost', 0)
-        if response.status_code == 200:
-            try:
-                items = data['tasks'][0]['result'][0]['items']
-                best, best_url, target_f = 101, "Not Ranked", 101
-                clean_t = normalize_url(target_url)
-                comp_found = {k: 101 for k in COMPETITORS.keys()}
-                comp_urls_found = {k: "" for k in COMPETITORS.keys()}
+    final_res = None
+    accumulated_cost = 0.0
+    
+    # RETRY LOGIC: Try up to 2 times
+    for attempt in range(1, 3):
+        res_data = {
+            "keyword": keyword, "exam": item['exam'], "type": item['type'],
+            "rank": 101, "url": "No Data", "bucket": "B4 (>20)", "target_rank": 101, "cost": 0,
+            "comp_ranks": {k: 101 for k in COMPETITORS.keys()},
+            "comp_urls": {k: "" for k in COMPETITORS.keys()}
+        }
+        
+        try:
+            response = requests.post(url, headers=headers, json=payload)
+            data = response.json()
+            
+            # Accumulate cost from this attempt
+            this_cost = data.get('cost', 0)
+            accumulated_cost += this_cost
+            
+            if response.status_code == 200:
+                try:
+                    items = data['tasks'][0]['result'][0]['items']
+                    best, best_url, target_f = 101, "Not Ranked", 101
+                    clean_t = normalize_url(target_url)
+                    comp_found = {k: 101 for k in COMPETITORS.keys()}
+                    comp_urls_found = {k: "" for k in COMPETITORS.keys()}
 
-                for item in items:
-                    if item['type'] == 'organic':
-                        r_url = item.get('url', '')
-                        clean_r = normalize_url(r_url)
-                        grp = item['rank_group']
-                        if TARGET_DOMAIN in r_url:
-                            if grp < best: best, best_url = grp, r_url
-                            if clean_t and clean_t in clean_r:
-                                if grp < target_f: target_f = grp
-                        for c_key, c_domain in COMPETITORS.items():
-                            if c_domain in r_url:
-                                if grp < comp_found[c_key]:
-                                    comp_found[c_key], comp_urls_found[c_key] = grp, r_url 
+                    for item_res in items:
+                        if item_res['type'] == 'organic':
+                            r_url = item_res.get('url', '')
+                            clean_r = normalize_url(r_url)
+                            grp = item_res['rank_group']
+                            
+                            # Check EduTap
+                            if TARGET_DOMAIN in r_url:
+                                if grp < best: best, best_url = grp, r_url
+                                if clean_t and clean_t in clean_r:
+                                    if grp < target_f: target_f = grp
+                            
+                            # Check Competitors
+                            for c_key, c_domain in COMPETITORS.items():
+                                if c_domain in r_url:
+                                    if grp < comp_found[c_key]:
+                                        comp_found[c_key], comp_urls_found[c_key] = grp, r_url 
 
-                bucket = "B4 (>20)"
-                if best <= 3: bucket = "B1 (1-3)"
-                elif best <= 10: bucket = "B2 (4-10)"
-                elif best <= 20: bucket = "B3 (11-20)"
-                res_data.update({'rank': best, 'url': best_url, 'bucket': bucket, 'target_rank': target_f, 'comp_ranks': comp_found, 'comp_urls': comp_urls_found})
-            except: pass
-        else: res_data['url'] = f"Err: {data.get('status_message')}"
-    except Exception as e: res_data['url'] = f"Err: {str(e)}"
-    return res_data
+                    bucket = "B4 (>20)"
+                    if best <= 3: bucket = "B1 (1-3)"
+                    elif best <= 10: bucket = "B2 (4-10)"
+                    elif best <= 20: bucket = "B3 (11-20)"
+                    
+                    res_data.update({'rank': best, 'url': best_url, 'bucket': bucket, 'target_rank': target_f, 'comp_ranks': comp_found, 'comp_urls': comp_urls_found})
+                except: pass
+            else: res_data['url'] = f"Err: {data.get('status_message')}"
+        except Exception as e: res_data['url'] = f"Err: {str(e)}"
+
+        # DECISION TIME
+        if res_data['rank'] <= 20:
+            # FOUND IT! Return immediately.
+            res_data['cost'] = accumulated_cost
+            return res_data
+        
+        # If we are here, rank > 20.
+        # Store this result. If it's the last attempt, we will return it.
+        res_data['cost'] = accumulated_cost
+        final_res = res_data
+        
+        # If attempt 1 failed, we loop again to double check.
+        if attempt == 1:
+            time.sleep(0.5) # Tiny pause before retry
+
+    return final_res
 
 # --- RUNNER ---
 def perform_update(keywords_list, progress_bar=None, status_text=None):
@@ -234,7 +266,6 @@ def perform_update(keywords_list, progress_bar=None, status_text=None):
 
 # --- SMART EMAIL SYSTEM ---
 def send_email_alert(alerts_dict, subject_prefix="Automatic Run", all_checked_data=None):
-    # Split receivers by comma (Handles multiple emails)
     if "," in EMAIL_RECEIVER:
         recipients = [e.strip() for e in EMAIL_RECEIVER.split(",")]
     else:
@@ -250,7 +281,11 @@ def send_email_alert(alerts_dict, subject_prefix="Automatic Run", all_checked_da
     msg['From'] = EMAIL_SENDER
     msg['To'] = ", ".join(recipients)
     
-    # 1. IF ALERTS EXIST (Red/Orange/Yellow/Green) -> SHOW THEM
+    # Helper to clean up Rank Numbers
+    def fmt_rank(val):
+        return "Not in Top 20" if val > 20 else val
+
+    # 1. IF ALERTS EXIST
     if has_alerts:
         msg['Subject'] = f"{subject_prefix}: SEO Alert ({date_label})"
         html_body = f"<h2>📉 {subject_prefix} Report ({date_label})</h2>"
@@ -260,28 +295,28 @@ def send_email_alert(alerts_dict, subject_prefix="Automatic Run", all_checked_da
             html_body += "<h3 style='color:red;'>🔴 Critical: Dropped out of Top 10</h3>"
             html_body += "<table border='1' cellpadding='5' style='border-collapse:collapse;'><tr><th>Keyword</th><th>Current</th><th>Previous</th></tr>"
             for item in alerts_dict["red"]:
-                html_body += f"<tr><td>{item['kw']}</td><td>{item['curr']}</td><td>{item['prev']}</td></tr>"
+                html_body += f"<tr><td>{item['kw']}</td><td>{fmt_rank(item['curr'])}</td><td>{fmt_rank(item['prev'])}</td></tr>"
             html_body += "</table><br>"
 
         if alerts_dict["orange"]:
             html_body += "<h3 style='color:orange;'>🟠 Warning: Dropped 4+ Positions</h3>"
             html_body += "<table border='1' cellpadding='5' style='border-collapse:collapse;'><tr><th>Keyword</th><th>Current</th><th>Previous</th></tr>"
             for item in alerts_dict["orange"]:
-                html_body += f"<tr><td>{item['kw']}</td><td>{item['curr']}</td><td>{item['prev']}</td></tr>"
+                html_body += f"<tr><td>{item['kw']}</td><td>{fmt_rank(item['curr'])}</td><td>{fmt_rank(item['prev'])}</td></tr>"
             html_body += "</table><br>"
 
         if alerts_dict["yellow"]:
             html_body += "<h3 style='color:#b5b500;'>🟡 Alert: Dropped out of Top 3</h3>"
             html_body += "<table border='1' cellpadding='5' style='border-collapse:collapse;'><tr><th>Keyword</th><th>Current</th><th>Previous</th></tr>"
             for item in alerts_dict["yellow"]:
-                html_body += f"<tr><td>{item['kw']}</td><td>{item['curr']}</td><td>{item['prev']}</td></tr>"
+                html_body += f"<tr><td>{item['kw']}</td><td>{fmt_rank(item['curr'])}</td><td>{fmt_rank(item['prev'])}</td></tr>"
             html_body += "</table><br>"
 
         if alerts_dict["green"]:
             html_body += "<h3 style='color:green;'>🟢 Celebration: Entered Top 3!</h3>"
             html_body += "<table border='1' cellpadding='5' style='border-collapse:collapse;'><tr><th>Keyword</th><th>Current</th><th>Previous</th></tr>"
             for item in alerts_dict["green"]:
-                html_body += f"<tr><td>{item['kw']}</td><td>{item['curr']}</td><td>{item['prev']}</td></tr>"
+                html_body += f"<tr><td>{item['kw']}</td><td>{fmt_rank(item['curr'])}</td><td>{fmt_rank(item['prev'])}</td></tr>"
             html_body += "</table><br>"
 
     # 2. IF NO ALERTS + MANUAL RUN -> SHOW FULL REPORT
@@ -291,9 +326,7 @@ def send_email_alert(alerts_dict, subject_prefix="Automatic Run", all_checked_da
         html_body += "<p>No significant alerts detected. Here is the full status of keywords checked:</p>"
         html_body += "<table border='1' cellpadding='5' style='border-collapse:collapse;'><tr><th>Keyword</th><th>Current</th><th>Previous</th></tr>"
         for item in all_checked_data:
-            c = item['curr'] if item['curr'] <= 20 else "Not in Top 20"
-            p = item['prev'] if item['prev'] <= 100 else "Unknown"
-            html_body += f"<tr><td>{item['kw']}</td><td>{c}</td><td>{p}</td></tr>"
+            html_body += f"<tr><td>{item['kw']}</td><td>{fmt_rank(item['curr'])}</td><td>{fmt_rank(item['prev'])}</td></tr>"
         html_body += "</table><br>"
 
     # 3. IF NO ALERTS + AUTOMATIC RUN -> SHORT MESSAGE
