@@ -1,4 +1,4 @@
-# FORCE UPDATE V14 - CLEAN FILTERS & P1/P2 TOTALS
+# FORCE UPDATE V24 - CRASH PROOF FOR EMPTY DATABASE
 import streamlit as st
 import pandas as pd
 from datetime import datetime, timedelta
@@ -12,15 +12,21 @@ if 'logged_in' not in st.session_state: st.session_state['logged_in'] = False
 
 def check_password():
     def password_entered():
-        if st.session_state["password"] == st.secrets["APP_PASSWORD"]:
+        # --- SAFE GET (Prevents KeyError Crash) ---
+        entered = st.session_state.get("password", "")
+        if entered == st.secrets["APP_PASSWORD"]:
             st.session_state["logged_in"] = True
-            del st.session_state["password"]
-        else: st.session_state["logged_in"] = False
+            # Only delete if it actually exists
+            if "password" in st.session_state:
+                del st.session_state["password"]
+        else: 
+            st.session_state["logged_in"] = False
 
     if st.session_state['logged_in']: return True
     st.markdown("### 🔒 Private Access Only")
     st.text_input("Enter Password:", type="password", on_change=password_entered, key="password")
     
+    # Only show error if password field is not empty but login failed
     if "password" in st.session_state and st.session_state["password"] and not st.session_state['logged_in']: 
         st.error("😕 Password incorrect")
         
@@ -107,7 +113,6 @@ def categorize_cluster(row):
     exam = str(row['exam']).strip()
     cluster = str(row['cluster']).strip().lower()
     if not cluster: return "Others"
-    # --- LOGIC REMAIN SAME, JUST HELPER FUNCTION ---
     if exam in ["JAIIB", "CAIIB", "JAIIB/CAIIB"]:
         p1_keys = ["pillar", "syllabus", "exam date", "registration", "admit card", "pyq", "previous year"]
         p2_keys = ["pattern", "benefit", "eligibility", "scorecard", "certificate", "result", "preparation", "study material", "analysis", "topper"]
@@ -130,7 +135,7 @@ with col_btn:
 tab1, tab2, tab3, tab4, tab5 = st.tabs(["📊 Dashboard", "📈 Visual Trends", "🏆 Competitors", "🧩 P1/P2 Analysis", "📝 Manage DB"])
 
 with tab1:
-    LOCK_ACTIVE = True; LIMIT_INR = 4500
+    LOCK_ACTIVE = True; LIMIT_INR = 5000 
     if 'usd_rate' not in st.session_state: st.session_state['usd_rate'] = get_live_usd_inr_rate()
     USD_TO_INR = st.session_state['usd_rate']
     spent_usd = get_current_month_cost()
@@ -298,7 +303,7 @@ with tab2:
     if history_df.empty: st.info("No history data yet.")
     else:
         # --- FIX 1: FILTER TO ONLY SHOW KEYWORDS THAT EXIST IN MASTER DB ---
-        valid_kws = set(master_df['keyword'].unique())
+        valid_kws = set(master_df['keyword'].unique()) if not master_df.empty and 'keyword' in master_df.columns else set()
         history_clean = history_df[history_df['keyword'].isin(valid_kws)]
         
         if history_clean.empty:
@@ -417,8 +422,18 @@ with tab4:
 with tab5:
     st.title("📝 Manage Database (Cloud)")
     c1, c2 = st.columns(2)
-    c1.metric("Exams", master_df['exam'].nunique())
-    c2.metric("Keywords", len(master_df))
+    
+    # ⚠️ FIXED: SAFE CHECK FOR EMPTY DATAFRAME
+    if not master_df.empty and 'exam' in master_df.columns:
+        ex_count = master_df['exam'].nunique()
+        kw_count = len(master_df)
+    else:
+        ex_count = 0
+        kw_count = 0
+        
+    c1.metric("Exams", ex_count)
+    c2.metric("Keywords", kw_count)
+    
     st.divider()
     if not master_df.empty:
         editable_df = master_df.copy(); editable_df.insert(0, "Select", False)
@@ -432,7 +447,7 @@ with tab5:
         f = st.file_uploader("Excel", type=["xlsx"])
         m = st.radio("Mode:", ["Append", "Replace Exam", "⚠️ REPLACE ALL"], horizontal=True)
         wipe = []
-        if "Replace Exam" in m: wipe = st.multiselect("Select:", sorted(master_df['exam'].unique()))
+        if "Replace Exam" in m: wipe = st.multiselect("Select:", sorted(master_df['exam'].unique()) if not master_df.empty and 'exam' in master_df.columns else [])
         if f and st.button("Process"):
             if "Append" in m: s,t = process_bulk_upload(f, "append")
             elif "Replace Exam" in m:
@@ -452,5 +467,3 @@ with tab5:
             cl = c4.text_input("Cluster"); v = c5.number_input("Vol"); u = c6.text_input("URL")
             if st.form_submit_button("Add"):
                 add_keyword(e,k,t,cl,v,u); st.success("Added"); st.rerun()
-
-
