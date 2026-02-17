@@ -1,4 +1,4 @@
-# FORCE UPDATE V24 - CRASH PROOF FOR EMPTY DATABASE
+# FORCE UPDATE V25 - EXACT URL MATCHING FIX
 import streamlit as st
 import pandas as pd
 from datetime import datetime, timedelta
@@ -74,7 +74,10 @@ def get_dashboard_view(master_df, history_df):
         r_url = str(row.get('Ranked URL', ''))
         t_url = str(row.get('target_url', ''))
         t_rank_val = row.get('Target Rank Found', 101)
-        clean_r = normalize_url(r_url); clean_t = normalize_url(t_url)
+        
+        # Normalize both URLs (strip http, www, trailing slashes)
+        clean_r = normalize_url(r_url)
+        clean_t = normalize_url(t_url)
 
         def fmt_rank(val):
             try: v = int(val)
@@ -96,9 +99,16 @@ def get_dashboard_view(master_df, history_df):
             status = "⚠️ Target Not Set"; display_t_url = None
         else:
             display_t_url = t_url
-            if c_val > 20: status = "❌ Not Ranked"; r_url = None
-            elif clean_t and clean_t in clean_r: status = "✅ Matched"
-            else: status = "⚠️ Mismatch"
+            if c_val > 20: 
+                status = "❌ Not Ranked"; r_url = None
+            # -----------------------------------------------------------
+            # ✅ FIX V25: CHANGED 'in' TO '==' FOR EXACT MATCHING
+            # -----------------------------------------------------------
+            elif clean_t and clean_t == clean_r: 
+                status = "✅ Matched"
+            else: 
+                status = "⚠️ Mismatch"
+        
         if not r_url or "Err" in r_url: r_url = None
         last_upd = row.get('last_updated', '-')
         bucket = row.get('bucket', 'Pending') if pd.notna(row.get('bucket')) else 'Pending'
