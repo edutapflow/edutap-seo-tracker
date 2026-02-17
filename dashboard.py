@@ -145,7 +145,7 @@ with col_btn:
 tab1, tab2, tab3, tab4, tab5 = st.tabs(["📊 Dashboard", "📈 Visual Trends", "🏆 Competitors", "🧩 P1/P2 Analysis", "📝 Manage DB"])
 
 with tab1:
-    LOCK_ACTIVE = True; LIMIT_INR = 5000 
+    LOCK_ACTIVE = True; LIMIT_INR = 6000 
     if 'usd_rate' not in st.session_state: st.session_state['usd_rate'] = get_live_usd_inr_rate()
     USD_TO_INR = st.session_state['usd_rate']
     spent_usd = get_current_month_cost()
@@ -477,3 +477,4 @@ with tab5:
             cl = c4.text_input("Cluster"); v = c5.number_input("Vol"); u = c6.text_input("URL")
             if st.form_submit_button("Add"):
                 add_keyword(e,k,t,cl,v,u); st.success("Added"); st.rerun()
+
