@@ -1,4 +1,4 @@
-# FORCE UPDATE V28 - DASHBOARD MATCHING V28 BACKEND
+# FORCE UPDATE V29 - DYNAMIC ADD KEYWORD FORM & CACHE REFRESH
 import streamlit as st
 import pandas as pd
 from datetime import datetime, timedelta
@@ -12,11 +12,9 @@ if 'logged_in' not in st.session_state: st.session_state['logged_in'] = False
 
 def check_password():
     def password_entered():
-        # --- SAFE GET (Prevents KeyError Crash) ---
         entered = st.session_state.get("password", "")
         if entered == st.secrets["APP_PASSWORD"]:
             st.session_state["logged_in"] = True
-            # Only delete if it actually exists
             if "password" in st.session_state:
                 del st.session_state["password"]
         else: 
@@ -26,7 +24,6 @@ def check_password():
     st.markdown("### 🔒 Private Access Only")
     st.text_input("Enter Password:", type="password", on_change=password_entered, key="password")
     
-    # Only show error if password field is not empty but login failed
     if "password" in st.session_state and st.session_state["password"] and not st.session_state['logged_in']: 
         st.error("😕 Password incorrect")
         
@@ -75,7 +72,6 @@ def get_dashboard_view(master_df, history_df):
         t_url = str(row.get('target_url', ''))
         t_rank_val = row.get('Target Rank Found', 101)
         
-        # Normalize both URLs (strip http, www, trailing slashes)
         clean_r = normalize_url(r_url)
         clean_t = normalize_url(t_url)
 
@@ -156,7 +152,6 @@ with tab1:
         else: c2.error("⛔ Exceeded")
     else: st.warning("⚠️ Budget Lock Disabled")
 
-    # --- MANUAL RUN LOGIC ---
     if st.session_state['is_running']:
         if 'pending_update_list' in st.session_state:
             kws = st.session_state['pending_update_list']
@@ -164,43 +159,34 @@ with tab1:
             st.toast(f"Updating {len(kws)} keywords...")
             bar = st.progress(0); txt = st.empty()
             
-            # Run Update
             r_date, r_cost, results_data = perform_update(kws, bar, txt)
             
-            # Generate Alerts
             alerts = {"red": [], "orange": [], "yellow": [], "green": []}
             all_checked_data = []
 
             for row in results_data:
                 kw = row['keyword']
-                ex = row['exam']    # <-- Captured Exam
-                typ = row['type']   # <-- Captured Type
+                ex = row['exam']    
+                typ = row['type']   
                 curr_rank = row['rank']
                 prev_rank = prev_map.get(kw, 101) 
                 
-                # Save for Full Report
                 all_checked_data.append({'kw': kw, 'curr': curr_rank, 'prev': prev_rank, 'exam': ex, 'type': typ})
 
                 if curr_rank > 100 and prev_rank > 100: continue
 
-                # ✅ PASSING EXAM & TYPE TO ALERTS
                 alert_obj = {"kw": kw, "curr": curr_rank, "prev": prev_rank, "exam": ex, "type": typ}
 
-                if prev_rank <= 10 and curr_rank > 10:
-                    alerts["red"].append(alert_obj)
-                elif (curr_rank - prev_rank) >= 4:
-                    alerts["orange"].append(alert_obj)
-                elif prev_rank <= 3 and curr_rank > 3:
-                    alerts["yellow"].append(alert_obj)
-                elif prev_rank > 3 and curr_rank <= 3:
-                    alerts["green"].append(alert_obj)
+                if prev_rank <= 10 and curr_rank > 10: alerts["red"].append(alert_obj)
+                elif (curr_rank - prev_rank) >= 4: alerts["orange"].append(alert_obj)
+                elif prev_rank <= 3 and curr_rank > 3: alerts["yellow"].append(alert_obj)
+                elif prev_rank > 3 and curr_rank <= 3: alerts["green"].append(alert_obj)
             
-            # PASS 'all_checked_data' SO IT CAN BE PRINTED IF NO ALERTS
             send_email_alert(alerts, subject_prefix="🛠️ Manual Run", all_checked_data=all_checked_data)
             
             st.session_state['last_run_date'] = r_date; st.session_state['last_run_cost'] = r_cost
             st.session_state['is_running'] = False
-            st.session_state['show_run_dialog'] = False # Reset dialog
+            st.session_state['show_run_dialog'] = False 
             del st.session_state['pending_update_list']
             get_ranking_data.clear(); st.rerun()
 
@@ -216,20 +202,15 @@ with tab1:
         c_mode1, c_mode2 = st.columns([1, 3])
         with c_mode1: base_opt = st.radio("📊 Base for %:", ["Total Database", "Selected Exam Total", "Selected Type Total"])
         
-        # --- FIX 2: NORMALIZE CLUSTERS (TITLE CASE) ---
         final_view['cluster'] = final_view['cluster'].fillna("").astype(str).str.strip().replace(['nan', 'None'], "")
         final_view['cluster'] = final_view['cluster'].apply(lambda x: x.title() if x else "Others")
         
         f1, f2, f3, f4, f5 = st.columns(5)
         
-        # Filter Logic
         sel_exam = f1.multiselect("Exam", sorted(final_view['exam'].unique()), placeholder="All Exams")
         
-        # --- FIX 2: DYNAMIC CLUSTER FILTER ---
-        if sel_exam:
-            avail_clusters = sorted(final_view[final_view['exam'].isin(sel_exam)]['cluster'].unique())
-        else:
-            avail_clusters = sorted(final_view['cluster'].unique())
+        if sel_exam: avail_clusters = sorted(final_view[final_view['exam'].isin(sel_exam)]['cluster'].unique())
+        else: avail_clusters = sorted(final_view['cluster'].unique())
             
         sel_cluster = f2.multiselect("Cluster", avail_clusters, placeholder="All Clusters")
         sel_type = f3.selectbox("Type", ["All"] + sorted(final_view['type'].unique().tolist()))
@@ -270,7 +251,6 @@ with tab1:
         
         col_btn, col_msg = st.columns([1, 4])
         with col_btn:
-            # --- POP-UP LOGIC ---
             if st.button(f"🚀 Run Update ({len(df)})", type="primary", disabled=not can_run):
                 st.session_state['show_run_dialog'] = True
             
@@ -283,7 +263,6 @@ with tab1:
                     cancel = c2.form_submit_button("❌ Cancel")
                     
                     if submit:
-                        # --- UPDATED: CHECKS NEW SECRET HERE ---
                         if run_pass == st.secrets["RUN_UPDATE_PASSWORD"]:
                             st.session_state['pending_update_list'] = df.to_dict('records')
                             st.session_state['prev_map_snapshot'] = prev_rank_map
@@ -314,7 +293,6 @@ with tab2:
     st.title("📈 Keyword Rank Trends")
     if history_df.empty: st.info("No history data yet.")
     else:
-        # --- FIX 1: FILTER TO ONLY SHOW KEYWORDS THAT EXIST IN MASTER DB ---
         valid_kws = set(master_df['keyword'].unique()) if not master_df.empty and 'keyword' in master_df.columns else set()
         history_clean = history_df[history_df['keyword'].isin(valid_kws)]
         
@@ -370,7 +348,6 @@ with tab3:
                 disp_comp[disp_name] = disp_comp.apply(make_link, axis=1)
             disp_comp = disp_comp.rename(columns={"rank": "EduTap"})
             
-            # --- FIX: Convert "101" to "Not in Top 20" for EduTap column ---
             disp_comp['EduTap'] = disp_comp['EduTap'].apply(lambda x: "Not in Top 20" if x > 20 else x)
 
             st.dataframe(disp_comp[["keyword", "EduTap"] + [c.title() for c in COMPETITORS_LIST]], use_container_width=True, hide_index=True, column_config={c.title(): st.column_config.LinkColumn(display_text=r"rank_display=(\d+)") for c in COMPETITORS_LIST})
@@ -410,7 +387,6 @@ with tab4:
             clean_p = merged_p[(merged_p['Category'] != "Others") & (merged_p['exam'].isin(sel_e))]
             if clean_p.empty: st.warning("No P1/P2 data.")
             else:
-                # --- FIX 3: ADD TOTAL KEYWORDS COUNT ---
                 stats = clean_p.groupby(['exam', 'Category']).agg(
                     Total_Keywords=('keyword', 'count'),
                     Avg_Rank=('rank', lambda x: x[x<=20].mean()), 
@@ -422,11 +398,7 @@ with tab4:
                 for ex in stats['exam'].unique():
                     st.markdown(f"#### {ex}")
                     d = stats[stats['exam'] == ex]
-                    
-                    # Display Table
                     st.table(d.pivot(index='Category', columns=[], values=['Total_Keywords', 'Avg_Rank', 'Top10']))
-                    
-                    # Chart
                     c = alt.Chart(d).mark_bar().encode(x='Category', y='Top10', color='Category', tooltip=['Total_Keywords', 'Top10', 'Avg_Rank']).properties(height=200)
                     st.altair_chart(c, use_container_width=True)
         else: st.info("Select exam.")
@@ -435,13 +407,13 @@ with tab5:
     st.title("📝 Manage Database (Cloud)")
     c1, c2 = st.columns(2)
     
-    # ⚠️ FIXED: SAFE CHECK FOR EMPTY DATAFRAME
     if not master_df.empty and 'exam' in master_df.columns:
         ex_count = master_df['exam'].nunique()
         kw_count = len(master_df)
+        existing_exams = sorted(master_df['exam'].unique().tolist())
+        existing_clusters = sorted(master_df['cluster'].fillna("").astype(str).str.strip().unique().tolist())
     else:
-        ex_count = 0
-        kw_count = 0
+        ex_count, kw_count, existing_exams, existing_clusters = 0, 0, [], []
         
     c1.metric("Exams", ex_count)
     c2.metric("Keywords", kw_count)
@@ -453,29 +425,66 @@ with tab5:
         rows_to_delete = edited_df[edited_df["Select"] == True]
         if not rows_to_delete.empty and st.button(f"🗑️ Delete Selected ({len(rows_to_delete)})", type="primary"):
             delete_bulk_keywords(rows_to_delete['keyword'].tolist()); get_master_data.clear(); st.success("Deleted!"); st.rerun()
+            
     st.divider()
-    tb, tm = st.tabs(["📂 Bulk Upload", "➕ Add"])
+    tb, tm = st.tabs(["📂 Bulk Upload", "➕ Add Manual Keyword"])
+    
+    # --- BULK UPLOAD TAB ---
     with tb:
         f = st.file_uploader("Excel", type=["xlsx"])
         m = st.radio("Mode:", ["Append", "Replace Exam", "⚠️ REPLACE ALL"], horizontal=True)
         wipe = []
-        if "Replace Exam" in m: wipe = st.multiselect("Select:", sorted(master_df['exam'].unique()) if not master_df.empty and 'exam' in master_df.columns else [])
-        if f and st.button("Process"):
-            if "Append" in m: s,t = process_bulk_upload(f, "append")
+        if "Replace Exam" in m: wipe = st.multiselect("Select Exam to Replace:", existing_exams)
+        
+        if f and st.button("Process Upload"):
+            if "Append" in m: s, t = process_bulk_upload(f, "append")
             elif "Replace Exam" in m:
                 if wipe:
                     for e in wipe: 
                         try: supabase.table("keywords_master").delete().eq("exam", e).execute()
                         except: pass
-                s,t = process_bulk_upload(f, "append")
-            else: s,t = process_bulk_upload(f, "replace_all")
-            if s: st.success(t); get_master_data.clear(); st.rerun()
+                s, t = process_bulk_upload(f, "append")
+            else: s, t = process_bulk_upload(f, "replace_all")
+            
+            if s: 
+                st.success(t)
+                get_master_data.clear() # CACHE CLEAR FIX
+                st.rerun()
             else: st.error(t)
+            
+    # --- MANUAL ADD TAB (FIXED V29 DYNAMIC UI) ---
     with tm:
-        with st.form("a"):
-            c1,c2,c3 = st.columns(3)
-            e = c1.text_input("Exam"); k = c2.text_input("Keyword"); t = c3.selectbox("Type", ["Primary", "Secondary"])
-            c4,c5,c6 = st.columns(3)
-            cl = c4.text_input("Cluster"); v = c5.number_input("Vol"); u = c6.text_input("URL")
-            if st.form_submit_button("Add"):
-                add_keyword(e,k,t,cl,v,u); st.success("Added"); st.rerun()
+        st.markdown("### Add Single Keyword")
+        col_e1, col_e2 = st.columns(2)
+        
+        # Exam Dropdown
+        e_sel = col_e1.selectbox("Select Exam", ["-- Select --", "➕ Add New Exam"] + existing_exams)
+        e_final = col_e1.text_input("Or Enter New Exam Name", disabled=(e_sel != "➕ Add New Exam")) if e_sel == "➕ Add New Exam" else e_sel
+
+        # Cluster Dropdown
+        cl_sel = col_e2.selectbox("Select Cluster", ["-- Select --", "➕ Add New Cluster"] + [c for c in existing_clusters if c])
+        cl_final = col_e2.text_input("Or Enter New Cluster Name", disabled=(cl_sel != "➕ Add New Cluster")) if cl_sel == "➕ Add New Cluster" else cl_sel
+
+        col_k1, col_k2, col_k3, col_k4 = st.columns(4)
+        k = col_k1.text_input("Keyword")
+        t = col_k2.selectbox("Type", ["Primary", "Secondary"])
+        v = col_k3.number_input("Volume", min_value=0, step=10)
+        u = col_k4.text_input("Target URL")
+
+        if st.button("✅ Save Keyword", type="primary"):
+            if e_final == "-- Select --" or not e_final:
+                st.error("❌ Please provide an Exam.")
+            elif not k:
+                st.error("❌ Please provide a Keyword.")
+            elif cl_final == "-- Select --" or not cl_final:
+                st.error("❌ Please provide a Cluster.")
+            else:
+                # Add it to database
+                success, msg = add_keyword(e_final, k, t, cl_final, v, u)
+                if success:
+                    st.success(f"✅ Successfully added '{k}'!")
+                    # CACHE CLEAR FIX - instantly updates dashboard
+                    get_master_data.clear() 
+                    st.rerun()
+                else:
+                    st.error(f"❌ {msg}")
