@@ -1,4 +1,4 @@
-# FORCE UPDATE V28 - FIXED EXAM-WISE EMAIL & IMPORTS
+# FORCE UPDATE V29 - BULK UPLOAD RESILIENCE
 import requests
 import time
 import pandas as pd
@@ -70,10 +70,12 @@ def get_all_keywords(): return fetch_all_rows("keywords_master")
 def add_keyword(exam, keyword, kw_type, cluster="", volume=0, target_url=""):
     if not supabase: return False, "Database not connected"
     try:
-        if supabase.table("keywords_master").select("*").eq("keyword", keyword).execute().data:
-            return False, f"Keyword '{keyword}' already exists."
+        # Check if keyword already exists
+        if supabase.table("keywords_master").select("*").eq("keyword", keyword.strip()).execute().data:
+            return False, f"Keyword '{keyword}' already exists in database."
+            
         supabase.table("keywords_master").insert({
-            "exam": exam, "keyword": keyword, "type": kw_type, 
+            "exam": exam, "keyword": keyword.strip(), "type": kw_type, 
             "cluster": cluster, "volume": volume, "target_url": target_url
         }).execute()
         return True, "Success"
@@ -102,24 +104,39 @@ def process_bulk_upload(uploaded_file, mode="append"):
                 try: supabase.table("keywords_master").delete().eq("exam", sheet.strip()).execute()
                 except: pass
 
+        # 🧠 FIX V29: Pre-fetch all keywords to prevent duplicate crash
+        existing_kws = set()
+        if mode != "replace_all":
+            try:
+                res = supabase.table("keywords_master").select("keyword").execute()
+                existing_kws = {str(r['keyword']).lower().strip() for r in res.data}
+            except: pass
+
         rows_to_insert = []
         for sheet in xls.sheet_names:
             df = pd.read_excel(xls, sheet_name=sheet)
             df.columns = [str(col).strip() for col in df.columns]
             current_exam = sheet.strip()
+            
             for _, row in df.iterrows():
                 cluster = str(row.get('Cluster', '')).strip()
                 t_url = str(row.get('Page URLs', row.get('Page URL', row.get('Target URL', '')))).strip()
                 if t_url.lower() == 'nan': t_url = ""
                 if cluster.lower() == 'nan': cluster = ""
                 
+                # Primary Keyword Logic
                 p_kw = str(row.get('Primary Keyword', '')).strip()
                 p_vol = row.get('Volume', 0)
                 try: p_vol = int(float(str(p_vol).replace(',', '')))
                 except: p_vol = 0
-                if p_kw and p_kw.lower() != 'nan':
-                    rows_to_insert.append({"exam": current_exam, "keyword": p_kw, "type": "Primary", "cluster": cluster, "volume": p_vol, "target_url": t_url})
                 
+                if p_kw and p_kw.lower() != 'nan':
+                    kw_clean = p_kw.lower()
+                    if kw_clean not in existing_kws:
+                        rows_to_insert.append({"exam": current_exam, "keyword": p_kw, "type": "Primary", "cluster": cluster, "volume": p_vol, "target_url": t_url})
+                        existing_kws.add(kw_clean)
+                
+                # Secondary Keywords Logic
                 sec_block = str(row.get('Secondary Keywords', ''))
                 if sec_block and sec_block.lower() != 'nan':
                     sec_kws = [k.strip() for k in sec_block.split('\n') if k.strip()]
@@ -129,14 +146,19 @@ def process_bulk_upload(uploaded_file, mode="append"):
                         for v in vol_block.split('\n'):
                             try: sec_vols.append(int(float(str(v).replace(',', '').strip())))
                             except: sec_vols.append(0)
+                            
                     for i, s_kw in enumerate(sec_kws):
+                        if not s_kw: continue
+                        kw_clean = s_kw.lower()
                         s_vol = sec_vols[i] if i < len(sec_vols) else 0
-                        rows_to_insert.append({"exam": current_exam, "keyword": s_kw, "type": "Secondary", "cluster": cluster, "volume": s_vol, "target_url": t_url})
+                        if kw_clean not in existing_kws:
+                            rows_to_insert.append({"exam": current_exam, "keyword": s_kw, "type": "Secondary", "cluster": cluster, "volume": s_vol, "target_url": t_url})
+                            existing_kws.add(kw_clean)
 
         if rows_to_insert:
             for i in range(0, len(rows_to_insert), 1000):
                 supabase.table("keywords_master").insert(rows_to_insert[i:i+1000]).execute()
-        return True, f"Success! Processed {len(rows_to_insert)} keywords."
+        return True, f"Success! Added {len(rows_to_insert)} new keywords. (Duplicates were ignored safely)."
     except Exception as e: return False, f"Error: {str(e)}"
 
 # --- API SCRAPER ---
@@ -144,7 +166,6 @@ def fetch_rank_single(item):
     keyword = item['keyword']
     target_url = item.get('target_url', '')
     
-    # 📍 LOCATION: 2356 (India National)
     url = "https://api.dataforseo.com/v3/serp/google/organic/live/advanced"
     payload = [{"keyword": keyword, "location_code": 2356, "language_code": "en", "device": "mobile", "os": "android", "depth": 20}]
     
@@ -154,7 +175,6 @@ def fetch_rank_single(item):
     final_res = None
     accumulated_cost = 0.0
     
-    # 🔁 SMART RETRY LOGIC (Max 2 Attempts)
     for attempt in range(1, 3):
         res_data = {
             "keyword": keyword, "exam": item['exam'], "type": item['type'],
@@ -178,9 +198,6 @@ def fetch_rank_single(item):
                     comp_urls_found = {k: "" for k in COMPETITORS.keys()}
 
                     for item_res in items:
-                        # ----------------------------------------------------
-                        # ORGANIC ONLY FILTER (As requested for stability)
-                        # ----------------------------------------------------
                         i_type = item_res.get('type', '')
                         if i_type == 'organic':
                             r_url = item_res.get('url', '')
@@ -280,23 +297,15 @@ def send_email_alert(alerts_dict, subject_prefix="Automatic Run", all_checked_da
     def fmt_rank(val):
         return "Not in Top 20" if val > 20 else val
 
-    # Helper: Generate Table Grouped by Exam
     def generate_grouped_table(items_list):
         if not items_list: return ""
-        # Sort by Exam first (Required for groupby)
         items_list.sort(key=lambda x: x.get('exam', 'Others'))
-        
         html = "<table border='1' cellpadding='5' style='border-collapse:collapse; width:100%; text-align:left;'>"
-        
         for exam_name, group in groupby(items_list, key=lambda x: x.get('exam', 'Others')):
-            # Exam Header Row (Dark Blue)
             html += f"<tr style='background-color:#2c3e50; color:white;'><th colspan='4' style='padding:8px; font-size:14px;'>{exam_name}</th></tr>"
-            # Column Headers
             html += "<tr style='background-color:#ecf0f1;'><th>Type</th><th>Keyword</th><th>Previous</th><th>Current</th></tr>"
-            # Data Rows
             for item in group:
                 html += f"<tr><td>{item.get('type','-')}</td><td>{item['kw']}</td><td>{fmt_rank(item['prev'])}</td><td>{fmt_rank(item['curr'])}</td></tr>"
-        
         html += "</table><br>"
         return html
 
@@ -304,29 +313,23 @@ def send_email_alert(alerts_dict, subject_prefix="Automatic Run", all_checked_da
         msg['Subject'] = f"{subject_prefix}: SEO Alert ({date_label})"
         html_body = f"<h2>📉 {subject_prefix} Report ({date_label})</h2>"
         html_body += "<p>Here are the significant rank changes from this run:</p>"
-        
         if alerts_dict["red"]:
             html_body += "<h3 style='color:red;'>🔴 Critical: Dropped out of Top 10</h3>"
             html_body += generate_grouped_table(alerts_dict["red"])
-
         if alerts_dict["orange"]:
             html_body += "<h3 style='color:orange;'>🟠 Warning: Dropped 4+ Positions</h3>"
             html_body += generate_grouped_table(alerts_dict["orange"])
-
         if alerts_dict["yellow"]:
             html_body += "<h3 style='color:#b5b500;'>🟡 Alert: Dropped out of Top 3</h3>"
             html_body += generate_grouped_table(alerts_dict["yellow"])
-
         if alerts_dict["green"]:
             html_body += "<h3 style='color:green;'>🟢 Celebration: Entered Top 3!</h3>"
             html_body += generate_grouped_table(alerts_dict["green"])
-
     elif is_manual and all_checked_data:
         msg['Subject'] = f"{subject_prefix}: Report Completed ({date_label})"
         html_body = f"<h2>✅ Manual Run Completed ({date_label})</h2>"
         html_body += "<p>No significant alerts detected. Here is the full status of keywords checked:</p>"
         html_body += generate_grouped_table(all_checked_data)
-
     else:
         msg['Subject'] = f"{subject_prefix}: All Stable ({date_label})"
         html_body = f"<h2>✅ Automatic Update Completed ({date_label})</h2>"
@@ -334,7 +337,6 @@ def send_email_alert(alerts_dict, subject_prefix="Automatic Run", all_checked_da
         html_body += "<p>All monitored keywords remained stable within their previous buckets.</p>"
 
     msg.attach(MIMEText(html_body, 'html'))
-
     try:
         server = smtplib.SMTP('smtp.gmail.com', 587)
         server.starttls()
