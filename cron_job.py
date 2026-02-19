@@ -1,4 +1,4 @@
-# FORCE UPDATE V4 - MATCHES NEW EMAIL FUNCTION
+# FORCE UPDATE V5 - PASS EXAM DATA FOR EMAIL GROUPING
 import pandas as pd
 from backend_utils import perform_update, fetch_all_rows, send_email_alert
 
@@ -33,21 +33,26 @@ def run_automation():
 
     for row in results_data:
         kw = row['keyword']
+        ex = row['exam']    # <-- Captured Exam
+        typ = row['type']   # <-- Captured Type
         curr_rank = row['rank']
         prev_rank = prev_map.get(kw, 101) 
 
         if curr_rank > 100 and prev_rank > 100: continue
+        
+        # ✅ PASSING EXAM & TYPE TO ALERTS
+        alert_obj = {"kw": kw, "curr": curr_rank, "prev": prev_rank, "exam": ex, "type": typ}
 
         if prev_rank <= 10 and curr_rank > 10:
-            alerts["red"].append({"kw": kw, "curr": curr_rank, "prev": prev_rank})
+            alerts["red"].append(alert_obj)
         elif (curr_rank - prev_rank) >= 4:
-            alerts["orange"].append({"kw": kw, "curr": curr_rank, "prev": prev_rank})
+            alerts["orange"].append(alert_obj)
         elif prev_rank <= 3 and curr_rank > 3:
-            alerts["yellow"].append({"kw": kw, "curr": curr_rank, "prev": prev_rank})
+            alerts["yellow"].append(alert_obj)
         elif prev_rank > 3 and curr_rank <= 3:
-            alerts["green"].append({"kw": kw, "curr": curr_rank, "prev": prev_rank})
+            alerts["green"].append(alert_obj)
 
-    # 5. Send Email (Pass None for checked_data so it doesn't print the huge list on auto runs)
+    # 5. Send Email
     print("   ... Sending Email Alert")
     send_email_alert(alerts, subject_prefix="📅 Weekly Automatic Run", all_checked_data=None)
     
