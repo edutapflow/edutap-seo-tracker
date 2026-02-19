@@ -1,4 +1,4 @@
-# FORCE UPDATE V25 - EXACT URL MATCHING FIX
+# FORCE UPDATE V26 - PASS EXAM DATA FOR EMAIL GROUPING
 import streamlit as st
 import pandas as pd
 from datetime import datetime, timedelta
@@ -101,9 +101,6 @@ def get_dashboard_view(master_df, history_df):
             display_t_url = t_url
             if c_val > 20: 
                 status = "❌ Not Ranked"; r_url = None
-            # -----------------------------------------------------------
-            # ✅ FIX V25: CHANGED 'in' TO '==' FOR EXACT MATCHING
-            # -----------------------------------------------------------
             elif clean_t and clean_t == clean_r: 
                 status = "✅ Matched"
             else: 
@@ -170,28 +167,33 @@ with tab1:
             # Run Update
             r_date, r_cost, results_data = perform_update(kws, bar, txt)
             
-            # Generate Alerts & Full Data for Report
+            # Generate Alerts
             alerts = {"red": [], "orange": [], "yellow": [], "green": []}
             all_checked_data = []
 
             for row in results_data:
                 kw = row['keyword']
+                ex = row['exam']    # <-- Captured Exam
+                typ = row['type']   # <-- Captured Type
                 curr_rank = row['rank']
                 prev_rank = prev_map.get(kw, 101) 
                 
                 # Save for Full Report
-                all_checked_data.append({'kw': kw, 'curr': curr_rank, 'prev': prev_rank})
+                all_checked_data.append({'kw': kw, 'curr': curr_rank, 'prev': prev_rank, 'exam': ex, 'type': typ})
 
                 if curr_rank > 100 and prev_rank > 100: continue
 
+                # ✅ PASSING EXAM & TYPE TO ALERTS
+                alert_obj = {"kw": kw, "curr": curr_rank, "prev": prev_rank, "exam": ex, "type": typ}
+
                 if prev_rank <= 10 and curr_rank > 10:
-                    alerts["red"].append({"kw": kw, "curr": curr_rank, "prev": prev_rank})
+                    alerts["red"].append(alert_obj)
                 elif (curr_rank - prev_rank) >= 4:
-                    alerts["orange"].append({"kw": kw, "curr": curr_rank, "prev": prev_rank})
+                    alerts["orange"].append(alert_obj)
                 elif prev_rank <= 3 and curr_rank > 3:
-                    alerts["yellow"].append({"kw": kw, "curr": curr_rank, "prev": prev_rank})
+                    alerts["yellow"].append(alert_obj)
                 elif prev_rank > 3 and curr_rank <= 3:
-                    alerts["green"].append({"kw": kw, "curr": curr_rank, "prev": prev_rank})
+                    alerts["green"].append(alert_obj)
             
             # PASS 'all_checked_data' SO IT CAN BE PRINTED IF NO ALERTS
             send_email_alert(alerts, subject_prefix="🛠️ Manual Run", all_checked_data=all_checked_data)
@@ -477,4 +479,3 @@ with tab5:
             cl = c4.text_input("Cluster"); v = c5.number_input("Vol"); u = c6.text_input("URL")
             if st.form_submit_button("Add"):
                 add_keyword(e,k,t,cl,v,u); st.success("Added"); st.rerun()
-
