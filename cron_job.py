@@ -1,4 +1,4 @@
-# FORCE UPDATE V5 - PASS EXAM DATA FOR EMAIL GROUPING
+# FORCE UPDATE V6 - PASS EXAM DATA FOR EMAIL GROUPING
 import pandas as pd
 from backend_utils import perform_update, fetch_all_rows, send_email_alert
 
