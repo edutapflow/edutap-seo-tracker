@@ -1,4 +1,4 @@
-# FORCE UPDATE V27 - FIXED EXAM-WISE EMAIL & IMPORTS
+# FORCE UPDATE V28 - FIXED EXAM-WISE EMAIL & IMPORTS
 import requests
 import time
 import pandas as pd
@@ -144,6 +144,7 @@ def fetch_rank_single(item):
     keyword = item['keyword']
     target_url = item.get('target_url', '')
     
+    # 📍 LOCATION: 2356 (India National)
     url = "https://api.dataforseo.com/v3/serp/google/organic/live/advanced"
     payload = [{"keyword": keyword, "location_code": 2356, "language_code": "en", "device": "mobile", "os": "android", "depth": 20}]
     
@@ -153,6 +154,7 @@ def fetch_rank_single(item):
     final_res = None
     accumulated_cost = 0.0
     
+    # 🔁 SMART RETRY LOGIC (Max 2 Attempts)
     for attempt in range(1, 3):
         res_data = {
             "keyword": keyword, "exam": item['exam'], "type": item['type'],
@@ -176,8 +178,11 @@ def fetch_rank_single(item):
                     comp_urls_found = {k: "" for k in COMPETITORS.keys()}
 
                     for item_res in items:
+                        # ----------------------------------------------------
+                        # ORGANIC ONLY FILTER (As requested for stability)
+                        # ----------------------------------------------------
                         i_type = item_res.get('type', '')
-                        if i_type in ['organic', 'featured_snippet']:
+                        if i_type == 'organic':
                             r_url = item_res.get('url', '')
                             clean_r = normalize_url(r_url)
                             grp = item_res['rank_group']
@@ -255,7 +260,7 @@ def perform_update(keywords_list, progress_bar=None, status_text=None):
 
     return date_str, total_run_cost, results_to_save
 
-# --- SMART EMAIL SYSTEM (GROUPED BY EXAM) ---
+# --- SMART EMAIL SYSTEM (EXAM-WISE TABLE) ---
 def send_email_alert(alerts_dict, subject_prefix="Automatic Run", all_checked_data=None):
     if "," in EMAIL_RECEIVER:
         recipients = [e.strip() for e in EMAIL_RECEIVER.split(",")]
@@ -275,22 +280,20 @@ def send_email_alert(alerts_dict, subject_prefix="Automatic Run", all_checked_da
     def fmt_rank(val):
         return "Not in Top 20" if val > 20 else val
 
-    # Helper function to generate Exam-Wise Tables
+    # Helper: Generate Table Grouped by Exam
     def generate_grouped_table(items_list):
         if not items_list: return ""
-        # 1. Sort by Exam so GroupBy works
+        # Sort by Exam first (Required for groupby)
         items_list.sort(key=lambda x: x.get('exam', 'Others'))
         
         html = "<table border='1' cellpadding='5' style='border-collapse:collapse; width:100%; text-align:left;'>"
         
-        # 2. Group items by Exam Name
         for exam_name, group in groupby(items_list, key=lambda x: x.get('exam', 'Others')):
-            # Dark Header for Exam Name
-            html += f"<tr style='background-color:#2c3e50; color:white;'><th colspan='4' style='padding:8px;'>{exam_name}</th></tr>"
+            # Exam Header Row (Dark Blue)
+            html += f"<tr style='background-color:#2c3e50; color:white;'><th colspan='4' style='padding:8px; font-size:14px;'>{exam_name}</th></tr>"
             # Column Headers
             html += "<tr style='background-color:#ecf0f1;'><th>Type</th><th>Keyword</th><th>Previous</th><th>Current</th></tr>"
-            
-            # Rows
+            # Data Rows
             for item in group:
                 html += f"<tr><td>{item.get('type','-')}</td><td>{item['kw']}</td><td>{fmt_rank(item['prev'])}</td><td>{fmt_rank(item['curr'])}</td></tr>"
         
