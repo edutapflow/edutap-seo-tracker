@@ -1,4 +1,4 @@
-# FORCE UPDATE V18 - SMART CHECK (ONLY DOUBLE CHECK FAILURES)
+# FORCE UPDATE V24 - EXAM-WISE EMAIL GROUPING
 import requests
 import time
 import pandas as pd
@@ -9,6 +9,7 @@ from email.mime.multipart import MIMEMultipart
 from datetime import datetime, timedelta
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from supabase import create_client, Client
+from itertools import groupby
 from config import API_LOGIN, API_PASSWORD, SUPABASE_URL, SUPABASE_KEY, EMAIL_SENDER, EMAIL_PASSWORD, EMAIL_RECEIVER
 
 # --- CONNECT TO CLOUD ---
@@ -138,14 +139,13 @@ def process_bulk_upload(uploaded_file, mode="append"):
         return True, f"Success! Processed {len(rows_to_insert)} keywords."
     except Exception as e: return False, f"Error: {str(e)}"
 
-# --- API SCRAPER (SMART DOUBLE CHECK) ---
+# --- API SCRAPER ---
 def fetch_rank_single(item):
     keyword = item['keyword']
     target_url = item.get('target_url', '')
     
-    # ⚠️ IF YOU WANT TO CHANGE LOCATION, CHANGE '2356' TO '9184262' HERE
     url = "https://api.dataforseo.com/v3/serp/google/organic/live/advanced"
-    payload = [{"keyword": keyword, "location_code": 9184262, "language_code": "en", "device": "mobile", "os": "android", "depth": 20}]
+    payload = [{"keyword": keyword, "location_code": 2356, "language_code": "en", "device": "mobile", "os": "android", "depth": 20}]
     
     auth = "Basic " + base64.b64encode(f"{API_LOGIN}:{API_PASSWORD}".encode()).decode()
     headers = {'Authorization': auth, 'Content-Type': 'application/json'}
@@ -153,7 +153,6 @@ def fetch_rank_single(item):
     final_res = None
     accumulated_cost = 0.0
     
-    # RETRY LOGIC: Try up to 2 times
     for attempt in range(1, 3):
         res_data = {
             "keyword": keyword, "exam": item['exam'], "type": item['type'],
@@ -165,8 +164,6 @@ def fetch_rank_single(item):
         try:
             response = requests.post(url, headers=headers, json=payload)
             data = response.json()
-            
-            # Accumulate cost
             this_cost = data.get('cost', 0)
             accumulated_cost += this_cost
             
@@ -179,7 +176,8 @@ def fetch_rank_single(item):
                     comp_urls_found = {k: "" for k in COMPETITORS.keys()}
 
                     for item_res in items:
-                        if item_res['type'] == 'organic':
+                        i_type = item_res.get('type', '')
+                        if i_type in ['organic', 'featured_snippet']:
                             r_url = item_res.get('url', '')
                             clean_r = normalize_url(r_url)
                             grp = item_res['rank_group']
@@ -204,65 +202,17 @@ def fetch_rank_single(item):
             else: res_data['url'] = f"Err: {data.get('status_message')}"
         except Exception as e: res_data['url'] = f"Err: {str(e)}"
 
-        # 🧠 SMART LOGIC:
-        # If we found a rank <= 20, we trust it. STOP immediately.
         if res_data['rank'] <= 20:
             res_data['cost'] = accumulated_cost
             return res_data
         
-        # If Rank > 20 (Fail), we store this result and loop to Try #2.
         final_res = res_data
-        
         if attempt == 1: time.sleep(0.5)
 
-    # If we finished loop and still haven't returned, return the result of the last attempt.
     final_res['cost'] = accumulated_cost
     return final_res
 
-# --- RUNNER ---
-def perform_update(keywords_list, progress_bar=None, status_text=None):
-    ist_now = datetime.utcnow() + timedelta(hours=5, minutes=30)
-    date_str = ist_now.strftime("%Y-%m-%d %H:%M")
-    
-    total = len(keywords_list)
-    total_run_cost = 0.0
-    completed = 0
-    results_to_save = []
-
-    with ThreadPoolExecutor(max_workers=15) as executor:
-        future_to_kw = {executor.submit(fetch_rank_single, item): item for item in keywords_list}
-        for future in as_completed(future_to_kw):
-            res = future.result()
-            total_run_cost += res['cost']
-            cr = res['comp_ranks']; cu = res['comp_urls']
-            
-            row = {
-                "date": date_str, "keyword": res['keyword'], "exam": res['exam'], "type": res['type'], 
-                "rank": res['rank'], "url": res['url'], "bucket": res['bucket'], "target_rank": res['target_rank'],
-                "rank_anujjindal": cr['anujjindal'], "rank_careerpower": cr['careerpower'], 
-                "rank_testbook": cr['testbook'], "rank_oliveboard": cr['oliveboard'], 
-                "rank_adda247": cr['adda247'], "rank_ixambee": cr['ixambee'],
-                "url_anujjindal": cu['anujjindal'], "url_careerpower": cu['careerpower'], 
-                "url_testbook": cu['testbook'], "url_oliveboard": cu['oliveboard'], 
-                "url_adda247": cu['adda247'], "url_ixambee": cu['ixambee']
-            }
-            results_to_save.append(row)
-            completed += 1
-            if status_text: status_text.text(f"Processing... {completed}/{total}")
-            if progress_bar: progress_bar.progress(completed / total)
-            
-    if results_to_save and supabase:
-        for i in range(0, len(results_to_save), 500):
-            try: supabase.table("rankings").insert(results_to_save[i:i+500]).execute()
-            except Exception as e: print(f"Error saving batch: {e}")
-
-    try: 
-        if supabase: supabase.table("update_logs").insert({"run_date": date_str, "keywords_count": total, "total_cost": total_run_cost}).execute()
-    except: pass
-
-    return date_str, total_run_cost, results_to_save
-
-# --- SMART EMAIL SYSTEM ---
+# --- SMART EMAIL SYSTEM (GROUPED BY EXAM) ---
 def send_email_alert(alerts_dict, subject_prefix="Automatic Run", all_checked_data=None):
     if "," in EMAIL_RECEIVER:
         recipients = [e.strip() for e in EMAIL_RECEIVER.split(",")]
@@ -279,11 +229,31 @@ def send_email_alert(alerts_dict, subject_prefix="Automatic Run", all_checked_da
     msg['From'] = EMAIL_SENDER
     msg['To'] = ", ".join(recipients)
     
-    # Helper to clean up Rank Numbers
     def fmt_rank(val):
         return "Not in Top 20" if val > 20 else val
 
-    # 1. IF ALERTS EXIST
+    # Helper function to generate Exam-Wise Tables
+    def generate_grouped_table(items_list):
+        if not items_list: return ""
+        # 1. Sort by Exam so GroupBy works
+        items_list.sort(key=lambda x: x.get('exam', 'Others'))
+        
+        html = "<table border='1' cellpadding='5' style='border-collapse:collapse; width:100%; text-align:left;'>"
+        
+        # 2. Group items by Exam Name
+        for exam_name, group in groupby(items_list, key=lambda x: x.get('exam', 'Others')):
+            # Dark Header for Exam Name
+            html += f"<tr style='background-color:#2c3e50; color:white;'><th colspan='4' style='padding:8px;'>{exam_name}</th></tr>"
+            # Column Headers
+            html += "<tr style='background-color:#ecf0f1;'><th>Type</th><th>Keyword</th><th>Previous</th><th>Current</th></tr>"
+            
+            # Rows
+            for item in group:
+                html += f"<tr><td>{item.get('type','-')}</td><td>{item['kw']}</td><td>{fmt_rank(item['prev'])}</td><td>{fmt_rank(item['curr'])}</td></tr>"
+        
+        html += "</table><br>"
+        return html
+
     if has_alerts:
         msg['Subject'] = f"{subject_prefix}: SEO Alert ({date_label})"
         html_body = f"<h2>📉 {subject_prefix} Report ({date_label})</h2>"
@@ -291,43 +261,26 @@ def send_email_alert(alerts_dict, subject_prefix="Automatic Run", all_checked_da
         
         if alerts_dict["red"]:
             html_body += "<h3 style='color:red;'>🔴 Critical: Dropped out of Top 10</h3>"
-            html_body += "<table border='1' cellpadding='5' style='border-collapse:collapse;'><tr><th>Keyword</th><th>Current</th><th>Previous</th></tr>"
-            for item in alerts_dict["red"]:
-                html_body += f"<tr><td>{item['kw']}</td><td>{fmt_rank(item['curr'])}</td><td>{fmt_rank(item['prev'])}</td></tr>"
-            html_body += "</table><br>"
+            html_body += generate_grouped_table(alerts_dict["red"])
 
         if alerts_dict["orange"]:
             html_body += "<h3 style='color:orange;'>🟠 Warning: Dropped 4+ Positions</h3>"
-            html_body += "<table border='1' cellpadding='5' style='border-collapse:collapse;'><tr><th>Keyword</th><th>Current</th><th>Previous</th></tr>"
-            for item in alerts_dict["orange"]:
-                html_body += f"<tr><td>{item['kw']}</td><td>{fmt_rank(item['curr'])}</td><td>{fmt_rank(item['prev'])}</td></tr>"
-            html_body += "</table><br>"
+            html_body += generate_grouped_table(alerts_dict["orange"])
 
         if alerts_dict["yellow"]:
             html_body += "<h3 style='color:#b5b500;'>🟡 Alert: Dropped out of Top 3</h3>"
-            html_body += "<table border='1' cellpadding='5' style='border-collapse:collapse;'><tr><th>Keyword</th><th>Current</th><th>Previous</th></tr>"
-            for item in alerts_dict["yellow"]:
-                html_body += f"<tr><td>{item['kw']}</td><td>{fmt_rank(item['curr'])}</td><td>{fmt_rank(item['prev'])}</td></tr>"
-            html_body += "</table><br>"
+            html_body += generate_grouped_table(alerts_dict["yellow"])
 
         if alerts_dict["green"]:
             html_body += "<h3 style='color:green;'>🟢 Celebration: Entered Top 3!</h3>"
-            html_body += "<table border='1' cellpadding='5' style='border-collapse:collapse;'><tr><th>Keyword</th><th>Current</th><th>Previous</th></tr>"
-            for item in alerts_dict["green"]:
-                html_body += f"<tr><td>{item['kw']}</td><td>{fmt_rank(item['curr'])}</td><td>{fmt_rank(item['prev'])}</td></tr>"
-            html_body += "</table><br>"
+            html_body += generate_grouped_table(alerts_dict["green"])
 
-    # 2. IF NO ALERTS + MANUAL RUN -> SHOW FULL REPORT
     elif is_manual and all_checked_data:
         msg['Subject'] = f"{subject_prefix}: Report Completed ({date_label})"
         html_body = f"<h2>✅ Manual Run Completed ({date_label})</h2>"
         html_body += "<p>No significant alerts detected. Here is the full status of keywords checked:</p>"
-        html_body += "<table border='1' cellpadding='5' style='border-collapse:collapse;'><tr><th>Keyword</th><th>Current</th><th>Previous</th></tr>"
-        for item in all_checked_data:
-            html_body += f"<tr><td>{item['kw']}</td><td>{fmt_rank(item['curr'])}</td><td>{fmt_rank(item['prev'])}</td></tr>"
-        html_body += "</table><br>"
+        html_body += generate_grouped_table(all_checked_data)
 
-    # 3. IF NO ALERTS + AUTOMATIC RUN -> SHORT MESSAGE
     else:
         msg['Subject'] = f"{subject_prefix}: All Stable ({date_label})"
         html_body = f"<h2>✅ Automatic Update Completed ({date_label})</h2>"
@@ -345,4 +298,3 @@ def send_email_alert(alerts_dict, subject_prefix="Automatic Run", all_checked_da
         print("📧 Email Alert Sent Successfully!")
     except Exception as e:
         print(f"❌ Failed to send email: {e}")
-
