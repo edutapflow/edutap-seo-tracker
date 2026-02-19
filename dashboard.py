@@ -1,4 +1,4 @@
-# FORCE UPDATE V27 - DASHBOARD MATCHING V27 BACKEND
+# FORCE UPDATE V28 - DASHBOARD MATCHING V28 BACKEND
 import streamlit as st
 import pandas as pd
 from datetime import datetime, timedelta
@@ -309,6 +309,127 @@ with tab1:
 
         cols = ["Alert", "exam", "cluster", "keyword", "type", "Keyword Check", "Ranked URL", "Ranked URL Rank", "Ranked URL Pre. Rank", "Target URL", "Target URL Rank", "Target URL Pre. Rank", "Volume", "Last Updated"]
         st.dataframe(df[cols].style.apply(highlight_alert, axis=1), use_container_width=True, hide_index=True, column_config={"Ranked URL": st.column_config.LinkColumn(display_text=r"https?://[^/]+(/.*)"), "Target URL": st.column_config.LinkColumn(display_text=r"https?://[^/]+(/.*)"), "Volume": st.column_config.NumberColumn(format="%d")})
+
+with tab2:
+    st.title("📈 Keyword Rank Trends")
+    if history_df.empty: st.info("No history data yet.")
+    else:
+        # --- FIX 1: FILTER TO ONLY SHOW KEYWORDS THAT EXIST IN MASTER DB ---
+        valid_kws = set(master_df['keyword'].unique()) if not master_df.empty and 'keyword' in master_df.columns else set()
+        history_clean = history_df[history_df['keyword'].isin(valid_kws)]
+        
+        if history_clean.empty:
+            st.warning("No trend data matches current keyword list.")
+        else:
+            kws = sorted(history_clean['keyword'].unique())
+            sel_k = st.multiselect("Select Keyword(s):", kws)
+            c1, c2 = st.columns(2)
+            today = datetime.now().date()
+            start_d = c1.date_input("Start Date", today - timedelta(days=30))
+            end_d = c2.date_input("End Date", today)
+            if sel_k:
+                chart_data = history_clean[history_clean['keyword'].isin(sel_k)].copy()
+                chart_data['date_dt'] = pd.to_datetime(chart_data['date'])
+                chart_data = chart_data[(chart_data['date_dt'].dt.date >= start_d) & (chart_data['date_dt'].dt.date <= end_d)]
+                if chart_data.empty: st.warning("No data for this date range.")
+                else:
+                    chart_data['Day'] = chart_data['date_dt'].dt.date
+                    chart_data = chart_data.sort_values('date_dt').groupby(['keyword', 'Day'], as_index=False).last()
+                    chart_data['Plot Rank'] = chart_data['rank'].apply(lambda x: x if x <= 20 else 21)
+                    c = alt.Chart(chart_data).mark_line(point=True).encode(x=alt.X('Day:T', axis=alt.Axis(format='%b %d')), y=alt.Y('Plot Rank:Q', scale=alt.Scale(domain=[21, 1], reverse=True)), color='keyword:N', tooltip=['Day', 'keyword', 'rank']).interactive()
+                    st.altair_chart(c, use_container_width=True)
+            else: st.info("Select a keyword.")
+
+with tab3:
+    st.title("🏆 Competitor Analysis")
+    if history_df.empty or master_df.empty: st.info("No data.")
+    else:
+        history_clean = history_df.drop(columns=['exam', 'type'], errors='ignore')
+        merged_history = pd.merge(history_clean, master_df[['keyword', 'exam', 'type']], on='keyword', how='inner')
+        f_c1, f_c2 = st.columns(2)
+        avail_exams = sorted(merged_history['exam'].unique())
+        avail_types = sorted(merged_history['type'].unique())
+        sel_comp_exam = f_c1.multiselect("Filter by Exam:", avail_exams, placeholder="All Exams")
+        sel_comp_type = f_c2.selectbox("Filter by Type:", ["All"] + avail_types)
+        if sel_comp_exam: merged_history = merged_history[merged_history['exam'].isin(sel_comp_exam)]
+        if sel_comp_type != "All": merged_history = merged_history[merged_history['type'] == sel_comp_type]
+        if merged_history.empty: st.warning("No data.")
+        else:
+            merged_history['date_dt'] = pd.to_datetime(merged_history['date'])
+            latest_comp = merged_history.sort_values('date_dt').groupby('keyword').tail(1).copy()
+            st.subheader("1. Head-to-Head Comparison")
+            comp_cols = ["keyword", "rank"] + [f"rank_{c}" for c in COMPETITORS_LIST] + [f"url_{c}" for c in COMPETITORS_LIST]
+            disp_comp = latest_comp[comp_cols].copy()
+            for c in COMPETITORS_LIST:
+                r_col = f"rank_{c}"; u_col = f"url_{c}"; disp_name = c.title()
+                def make_link(row):
+                    try: r_val = int(row.get(r_col))
+                    except: r_val = 101
+                    if r_val <= 20 and row.get(u_col): return f"{row.get(u_col)}?rank_display={r_val}" 
+                    return "Not in Top 20"
+                disp_comp[disp_name] = disp_comp.apply(make_link, axis=1)
+            disp_comp = disp_comp.rename(columns={"rank": "EduTap"})
+            
+            # --- FIX: Convert "101" to "Not in Top 20" for EduTap column ---
+            disp_comp['EduTap'] = disp_comp['EduTap'].apply(lambda x: "Not in Top 20" if x > 20 else x)
+
+            st.dataframe(disp_comp[["keyword", "EduTap"] + [c.title() for c in COMPETITORS_LIST]], use_container_width=True, hide_index=True, column_config={c.title(): st.column_config.LinkColumn(display_text=r"rank_display=(\d+)") for c in COMPETITORS_LIST})
+            st.subheader("2. Consistent Outrankers (Last 4 Updates)")
+            counts = merged_history['keyword'].value_counts()
+            valid_kws = counts[counts >= 4].index
+            if len(valid_kws) == 0: st.info("Need 4 updates.")
+            else:
+                outrank_data = []
+                valid_hist = merged_history[merged_history['keyword'].isin(valid_kws)].sort_values('date_dt')
+                for k, grp in valid_hist.groupby('keyword'):
+                    last_4 = grp.tail(4)
+                    for comp in COMPETITORS_LIST:
+                        col = f"rank_{comp}"; wins = 0; cur_edu = last_4.iloc[-1]['rank']
+                        try: cur_comp = int(last_4.iloc[-1][col])
+                        except: cur_comp = 101
+                        for _, r in last_4.iterrows():
+                            e = r['rank']; c_r = 101
+                            try: c_r = int(r[col])
+                            except: pass
+                            if c_r <= 20 and c_r < e: wins += 1
+                        if wins == 4: outrank_data.append({"Keyword": k, "Competitor": comp.title(), "EduTap Rank": cur_edu if cur_edu<=20 else "20+", "Comp Rank": cur_comp})
+                if outrank_data: st.dataframe(pd.DataFrame(outrank_data), use_container_width=True)
+                else: st.info("No consistent outrankers.")
+
+with tab4:
+    st.title("🧩 P1 vs P2 Cluster Analysis")
+    if master_df.empty: st.info("No data.")
+    else:
+        all_exams = sorted(master_df['exam'].unique())
+        sel_e = st.multiselect("Select Exam(s):", all_exams, default=all_exams[:1] if all_exams else None)
+        if sel_e:
+            latest_p = history_df.sort_values(by=['date'], key=pd.to_datetime).groupby('keyword').tail(1)
+            merged_p = pd.merge(master_df, latest_p[['keyword', 'rank']], on='keyword', how='left')
+            merged_p['rank'] = merged_p['rank'].fillna(101)
+            merged_p['Category'] = merged_p.apply(categorize_cluster, axis=1)
+            clean_p = merged_p[(merged_p['Category'] != "Others") & (merged_p['exam'].isin(sel_e))]
+            if clean_p.empty: st.warning("No P1/P2 data.")
+            else:
+                # --- FIX 3: ADD TOTAL KEYWORDS COUNT ---
+                stats = clean_p.groupby(['exam', 'Category']).agg(
+                    Total_Keywords=('keyword', 'count'),
+                    Avg_Rank=('rank', lambda x: x[x<=20].mean()), 
+                    Top10=('rank', lambda x: (x<=10).sum())
+                ).reset_index()
+                
+                stats['Avg_Rank'] = stats['Avg_Rank'].fillna(0).round(1)
+                
+                for ex in stats['exam'].unique():
+                    st.markdown(f"#### {ex}")
+                    d = stats[stats['exam'] == ex]
+                    
+                    # Display Table
+                    st.table(d.pivot(index='Category', columns=[], values=['Total_Keywords', 'Avg_Rank', 'Top10']))
+                    
+                    # Chart
+                    c = alt.Chart(d).mark_bar().encode(x='Category', y='Top10', color='Category', tooltip=['Total_Keywords', 'Top10', 'Avg_Rank']).properties(height=200)
+                    st.altair_chart(c, use_container_width=True)
+        else: st.info("Select exam.")
 
 with tab5:
     st.title("📝 Manage Database (Cloud)")
