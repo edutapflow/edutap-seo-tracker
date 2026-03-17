@@ -1,4 +1,4 @@
-# FORCE UPDATE V30 - 4 RUNS HISTORY & TARGET PRE. RANK FIX
+# FORCE UPDATE V31 - DYNAMIC DATE COLUMN HEADERS
 import streamlit as st
 import pandas as pd
 from datetime import datetime, timedelta
@@ -47,41 +47,53 @@ def get_master_data(): return fetch_all_rows("keywords_master")
 
 @st.cache_data(show_spinner=False)
 def get_dashboard_view(master_df, history_df):
-    if master_df.empty: return pd.DataFrame(), {}
+    date_labels = ["Current", "Prev", "-2", "-3"]
+    if master_df.empty: return pd.DataFrame(), {}, date_labels
     
-    # 🧠 FIX V30: Pull past 4 records using Pandas GroupBy
     past_data = []
     prev_rank_map = {}
     
     if not history_df.empty:
+        # ✅ FIX V31: Extract actual dates for column headers
+        history_df = history_df.copy()
         history_df['date_dt'] = pd.to_datetime(history_df['date'])
-        history_df = history_df.sort_values('date_dt')
+        history_df['day'] = history_df['date_dt'].dt.strftime('%b %d') # e.g. "Mar 17"
         
-        for kw, grp in history_df.groupby('keyword'):
-            # Get last 4 rows, reverse so index 0 is the newest
-            tail = grp.tail(4).iloc[::-1].reset_index(drop=True)
+        unique_days = history_df.sort_values('date_dt', ascending=False)['day'].unique()[:4]
+        date_labels = list(unique_days)
+        while len(date_labels) < 4:
+            date_labels.append("N/A") # Padding for fresh databases
             
-            kw_data = {'keyword': kw}
+        for kw, grp in history_df.groupby('keyword'):
+            grp = grp.sort_values('date_dt')
+            
+            kw_data = {'keyword': kw, 'URL-0': "", 'bucket': 'Pending', 'Date-0': "-"}
+            for i in range(4):
+                kw_data[f'R-{i}'] = 101
+                kw_data[f'T-{i}'] = 101
+                
             if len(grp) >= 2:
                 prev_rank_map[kw] = grp.iloc[-2]['rank']
+            else:
+                prev_rank_map[kw] = 101
                 
-            for i in range(4):
-                if i < len(tail):
-                    kw_data[f'R-{i}'] = tail.loc[i, 'rank']
-                    kw_data[f'T-{i}'] = tail.loc[i, 'target_rank']
-                    kw_data[f'URL-{i}'] = tail.loc[i, 'url']
-                    kw_data[f'Date-{i}'] = tail.loc[i, 'date']
-                else:
-                    kw_data[f'R-{i}'] = 101
-                    kw_data[f'T-{i}'] = 101
-                    kw_data[f'URL-{i}'] = ""
-                    kw_data[f'Date-{i}'] = "-"
+            latest_per_day = grp.groupby('day').last()
             
-            # Capture bucket from the latest run
-            kw_data['bucket'] = tail.loc[0, 'bucket'] if not tail.empty else 'Pending'
+            for i, day in enumerate(date_labels):
+                if day != "N/A" and day in latest_per_day.index:
+                    kw_data[f'R-{i}'] = latest_per_day.loc[day, 'rank']
+                    kw_data[f'T-{i}'] = latest_per_day.loc[day, 'target_rank']
+                    if i == 0:
+                        kw_data['URL-0'] = latest_per_day.loc[day, 'url']
+                        kw_data['bucket'] = latest_per_day.loc[day, 'bucket']
+                        kw_data['Date-0'] = latest_per_day.loc[day, 'date']
+                        
             past_data.append(kw_data)
             
-    past_df = pd.DataFrame(past_data) if past_data else pd.DataFrame(columns=['keyword', 'bucket'])
+        past_df = pd.DataFrame(past_data) if past_data else pd.DataFrame(columns=['keyword', 'bucket'])
+    else:
+        past_df = pd.DataFrame(columns=['keyword', 'bucket'])
+        
     merged_df = pd.merge(master_df, past_df, on='keyword', how='left')
 
     def process_row(row):
@@ -105,7 +117,6 @@ def get_dashboard_view(master_df, history_df):
         disp_r2 = fmt_rank(row.get('R-2', 101))
         disp_r3 = fmt_rank(row.get('R-3', 101))
         
-        # ✅ FIX V30: Dynamic Target URL Rank History (Removed Hardcoded 101)
         disp_t_curr = fmt_rank(row.get('T-0', 101))
         disp_t_prev = fmt_rank(row.get('T-1', 101))
         disp_t2 = fmt_rank(row.get('T-2', 101))
@@ -138,13 +149,19 @@ def get_dashboard_view(master_df, history_df):
             display_t_url, disp_t_curr, disp_t_prev, disp_t2, disp_t3, last_upd, bucket
         ])
 
+    # Assign Dynamic Names!
     new_cols = [
-        'Alert', 'Keyword Check', 'Ranked URL Rank', 'Ranked URL Pre. Rank', 'Rank (-2)', 'Rank (-3)', 'Ranked URL', 
-        'Target URL', 'Target URL Rank', 'Target URL Pre. Rank', 'Target Rank (-2)', 'Target Rank (-3)', 'Last Updated', 'Bucket'
+        'Alert', 'Keyword Check', 
+        f'Rank ({date_labels[0]})', f'Rank ({date_labels[1]})', f'Rank ({date_labels[2]})', f'Rank ({date_labels[3]})', 
+        'Ranked URL', 
+        'Target URL', 
+        f'Target ({date_labels[0]})', f'Target ({date_labels[1]})', f'Target ({date_labels[2]})', f'Target ({date_labels[3]})', 
+        'Last Updated', 'Bucket'
     ]
+    
     merged_df[new_cols] = merged_df.apply(process_row, axis=1)
     merged_df['Volume'] = merged_df['volume'].fillna(0).astype(int)
-    return merged_df, prev_rank_map 
+    return merged_df, prev_rank_map, date_labels 
 
 def categorize_cluster(row):
     exam = str(row['exam']).strip()
@@ -229,7 +246,7 @@ with tab1:
 
     master_df = get_master_data()
     history_df = get_ranking_data()
-    final_view, prev_rank_map = get_dashboard_view(master_df, history_df)
+    final_view, prev_rank_map, date_labels = get_dashboard_view(master_df, history_df)
     
     if not final_view.empty:
         st.divider()
@@ -320,11 +337,13 @@ with tab1:
             if "🟢" in status: return ['background-color: #ccffcc; color: black'] * len(row) 
             return [''] * len(row)
 
-        # ✅ NEW: Table columns updated to include history
+        # ✅ DYNAMIC COLUMN HEADERS IMPLEMENTED HERE
         cols = [
             "Alert", "exam", "cluster", "keyword", "type", "Keyword Check", 
-            "Ranked URL", "Ranked URL Rank", "Ranked URL Pre. Rank", "Rank (-2)", "Rank (-3)", 
-            "Target URL", "Target URL Rank", "Target URL Pre. Rank", "Target Rank (-2)", "Target Rank (-3)", 
+            "Ranked URL", 
+            f"Rank ({date_labels[0]})", f"Rank ({date_labels[1]})", f"Rank ({date_labels[2]})", f"Rank ({date_labels[3]})", 
+            "Target URL", 
+            f"Target ({date_labels[0]})", f"Target ({date_labels[1]})", f"Target ({date_labels[2]})", f"Target ({date_labels[3]})", 
             "Volume", "Last Updated"
         ]
         
@@ -470,7 +489,6 @@ with tab5:
     st.divider()
     tb, tm = st.tabs(["📂 Bulk Upload", "➕ Add Manual Keyword"])
     
-    # --- BULK UPLOAD TAB ---
     with tb:
         f = st.file_uploader("Excel", type=["xlsx"])
         m = st.radio("Mode:", ["Append", "Replace Exam", "⚠️ REPLACE ALL"], horizontal=True)
@@ -493,7 +511,6 @@ with tab5:
                 st.rerun()
             else: st.error(t)
             
-    # --- MANUAL ADD TAB ---
     with tm:
         st.markdown("### Add Single Keyword")
         col_e1, col_e2 = st.columns(2)
