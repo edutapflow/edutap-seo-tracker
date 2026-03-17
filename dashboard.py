@@ -1,4 +1,4 @@
-# FORCE UPDATE V29 - DYNAMIC ADD KEYWORD FORM & CACHE REFRESH
+# FORCE UPDATE V30 - 4 RUNS HISTORY & TARGET PRE. RANK FIX
 import streamlit as st
 import pandas as pd
 from datetime import datetime, timedelta
@@ -48,29 +48,49 @@ def get_master_data(): return fetch_all_rows("keywords_master")
 @st.cache_data(show_spinner=False)
 def get_dashboard_view(master_df, history_df):
     if master_df.empty: return pd.DataFrame(), {}
+    
+    # 🧠 FIX V30: Pull past 4 records using Pandas GroupBy
+    past_data = []
+    prev_rank_map = {}
+    
     if not history_df.empty:
         history_df['date_dt'] = pd.to_datetime(history_df['date'])
         history_df = history_df.sort_values('date_dt')
-        latest = history_df.groupby('keyword').tail(1).copy()
-        latest = latest[['keyword', 'rank', 'bucket', 'date', 'url', 'target_rank']]
-        latest = latest.rename(columns={'rank': 'Current Rank', 'date': 'last_updated', 'url': 'Ranked URL', 'target_rank': 'Target Rank Found'})
-    else: latest = pd.DataFrame(columns=['keyword', 'Current Rank', 'bucket', 'last_updated', 'Ranked URL', 'Target Rank Found'])
-
-    merged_df = pd.merge(master_df, latest, on='keyword', how='left')
-    prev_rank_map = {}
-    if not history_df.empty:
+        
         for kw, grp in history_df.groupby('keyword'):
+            # Get last 4 rows, reverse so index 0 is the newest
+            tail = grp.tail(4).iloc[::-1].reset_index(drop=True)
+            
+            kw_data = {'keyword': kw}
             if len(grp) >= 2:
-                prev_rec = grp.iloc[-2]
-                prev_rank_map[kw] = prev_rec['rank']
-    
+                prev_rank_map[kw] = grp.iloc[-2]['rank']
+                
+            for i in range(4):
+                if i < len(tail):
+                    kw_data[f'R-{i}'] = tail.loc[i, 'rank']
+                    kw_data[f'T-{i}'] = tail.loc[i, 'target_rank']
+                    kw_data[f'URL-{i}'] = tail.loc[i, 'url']
+                    kw_data[f'Date-{i}'] = tail.loc[i, 'date']
+                else:
+                    kw_data[f'R-{i}'] = 101
+                    kw_data[f'T-{i}'] = 101
+                    kw_data[f'URL-{i}'] = ""
+                    kw_data[f'Date-{i}'] = "-"
+            
+            # Capture bucket from the latest run
+            kw_data['bucket'] = tail.loc[0, 'bucket'] if not tail.empty else 'Pending'
+            past_data.append(kw_data)
+            
+    past_df = pd.DataFrame(past_data) if past_data else pd.DataFrame(columns=['keyword', 'bucket'])
+    merged_df = pd.merge(master_df, past_df, on='keyword', how='left')
+
     def process_row(row):
         kw = row['keyword']
-        curr = row.get('Current Rank', 101)
-        prev = prev_rank_map.get(kw, 101)
-        r_url = str(row.get('Ranked URL', ''))
+        curr = row.get('R-0', 101); curr = int(curr) if pd.notna(curr) else 101
+        prev = row.get('R-1', 101); prev = int(prev) if pd.notna(prev) else 101
+        
+        r_url = str(row.get('URL-0', ''))
         t_url = str(row.get('target_url', ''))
-        t_rank_val = row.get('Target Rank Found', 101)
         
         clean_r = normalize_url(r_url)
         clean_t = normalize_url(t_url)
@@ -80,22 +100,28 @@ def get_dashboard_view(master_df, history_df):
             except: v = 101
             return "Not in Top 20" if v > 20 else v
 
-        disp_curr = fmt_rank(curr); disp_prev = fmt_rank(prev)
-        disp_t_curr = fmt_rank(t_rank_val); disp_t_prev = fmt_rank(101) 
-        c_val = int(curr) if pd.notna(curr) else 101
-        p_val = int(prev) if pd.notna(prev) else 101
+        disp_curr = fmt_rank(curr)
+        disp_prev = fmt_rank(prev)
+        disp_r2 = fmt_rank(row.get('R-2', 101))
+        disp_r3 = fmt_rank(row.get('R-3', 101))
         
+        # ✅ FIX V30: Dynamic Target URL Rank History (Removed Hardcoded 101)
+        disp_t_curr = fmt_rank(row.get('T-0', 101))
+        disp_t_prev = fmt_rank(row.get('T-1', 101))
+        disp_t2 = fmt_rank(row.get('T-2', 101))
+        disp_t3 = fmt_rank(row.get('T-3', 101))
+
         alert_status = "Normal"
-        if p_val <= 10 and c_val > 10: alert_status = "🔴 Out of Top 10"
-        elif (c_val - p_val) >= 4: alert_status = "🟠 Dropped 4+"
-        elif p_val <= 3 and c_val > 3: alert_status = "🟡 Out of Top 3"
-        elif p_val > 3 and c_val <= 3: alert_status = "🟢 Entered Top 3"
+        if prev <= 10 and curr > 10: alert_status = "🔴 Out of Top 10"
+        elif (curr - prev) >= 4: alert_status = "🟠 Dropped 4+"
+        elif prev <= 3 and curr > 3: alert_status = "🟡 Out of Top 3"
+        elif prev > 3 and curr <= 3: alert_status = "🟢 Entered Top 3"
 
         if not t_url or t_url.lower() in ["nan", "none", ""]:
             status = "⚠️ Target Not Set"; display_t_url = None
         else:
             display_t_url = t_url
-            if c_val > 20: 
+            if curr > 20: 
                 status = "❌ Not Ranked"; r_url = None
             elif clean_t and clean_t == clean_r: 
                 status = "✅ Matched"
@@ -103,11 +129,19 @@ def get_dashboard_view(master_df, history_df):
                 status = "⚠️ Mismatch"
         
         if not r_url or "Err" in r_url: r_url = None
-        last_upd = row.get('last_updated', '-')
+        raw_date = str(row.get('Date-0', '-'))
+        last_upd = raw_date[:16] if raw_date != '-' else '-'
         bucket = row.get('bucket', 'Pending') if pd.notna(row.get('bucket')) else 'Pending'
-        return pd.Series([alert_status, status, disp_curr, disp_prev, r_url, display_t_url, disp_t_curr, disp_t_prev, last_upd, bucket])
 
-    new_cols = ['Alert', 'Keyword Check', 'Ranked URL Rank', 'Ranked URL Pre. Rank', 'Ranked URL', 'Target URL', 'Target URL Rank', 'Target URL Pre. Rank', 'Last Updated', 'Bucket']
+        return pd.Series([
+            alert_status, status, disp_curr, disp_prev, disp_r2, disp_r3, r_url, 
+            display_t_url, disp_t_curr, disp_t_prev, disp_t2, disp_t3, last_upd, bucket
+        ])
+
+    new_cols = [
+        'Alert', 'Keyword Check', 'Ranked URL Rank', 'Ranked URL Pre. Rank', 'Rank (-2)', 'Rank (-3)', 'Ranked URL', 
+        'Target URL', 'Target URL Rank', 'Target URL Pre. Rank', 'Target Rank (-2)', 'Target Rank (-3)', 'Last Updated', 'Bucket'
+    ]
     merged_df[new_cols] = merged_df.apply(process_row, axis=1)
     merged_df['Volume'] = merged_df['volume'].fillna(0).astype(int)
     return merged_df, prev_rank_map 
@@ -286,7 +320,14 @@ with tab1:
             if "🟢" in status: return ['background-color: #ccffcc; color: black'] * len(row) 
             return [''] * len(row)
 
-        cols = ["Alert", "exam", "cluster", "keyword", "type", "Keyword Check", "Ranked URL", "Ranked URL Rank", "Ranked URL Pre. Rank", "Target URL", "Target URL Rank", "Target URL Pre. Rank", "Volume", "Last Updated"]
+        # ✅ NEW: Table columns updated to include history
+        cols = [
+            "Alert", "exam", "cluster", "keyword", "type", "Keyword Check", 
+            "Ranked URL", "Ranked URL Rank", "Ranked URL Pre. Rank", "Rank (-2)", "Rank (-3)", 
+            "Target URL", "Target URL Rank", "Target URL Pre. Rank", "Target Rank (-2)", "Target Rank (-3)", 
+            "Volume", "Last Updated"
+        ]
+        
         st.dataframe(df[cols].style.apply(highlight_alert, axis=1), use_container_width=True, hide_index=True, column_config={"Ranked URL": st.column_config.LinkColumn(display_text=r"https?://[^/]+(/.*)"), "Target URL": st.column_config.LinkColumn(display_text=r"https?://[^/]+(/.*)"), "Volume": st.column_config.NumberColumn(format="%d")})
 
 with tab2:
@@ -448,20 +489,18 @@ with tab5:
             
             if s: 
                 st.success(t)
-                get_master_data.clear() # CACHE CLEAR FIX
+                get_master_data.clear()
                 st.rerun()
             else: st.error(t)
             
-    # --- MANUAL ADD TAB (FIXED V29 DYNAMIC UI) ---
+    # --- MANUAL ADD TAB ---
     with tm:
         st.markdown("### Add Single Keyword")
         col_e1, col_e2 = st.columns(2)
         
-        # Exam Dropdown
         e_sel = col_e1.selectbox("Select Exam", ["-- Select --", "➕ Add New Exam"] + existing_exams)
         e_final = col_e1.text_input("Or Enter New Exam Name", disabled=(e_sel != "➕ Add New Exam")) if e_sel == "➕ Add New Exam" else e_sel
 
-        # Cluster Dropdown
         cl_sel = col_e2.selectbox("Select Cluster", ["-- Select --", "➕ Add New Cluster"] + [c for c in existing_clusters if c])
         cl_final = col_e2.text_input("Or Enter New Cluster Name", disabled=(cl_sel != "➕ Add New Cluster")) if cl_sel == "➕ Add New Cluster" else cl_sel
 
@@ -479,11 +518,9 @@ with tab5:
             elif cl_final == "-- Select --" or not cl_final:
                 st.error("❌ Please provide a Cluster.")
             else:
-                # Add it to database
                 success, msg = add_keyword(e_final, k, t, cl_final, v, u)
                 if success:
                     st.success(f"✅ Successfully added '{k}'!")
-                    # CACHE CLEAR FIX - instantly updates dashboard
                     get_master_data.clear() 
                     st.rerun()
                 else:
