@@ -256,7 +256,7 @@ with tab1:
         if too_many_exams:
             st.warning(f"⚠️ You selected **{len(sel_exam)} exams**. Manual run limit is **{MAX_EXAMS_FOR_MANUAL_RUN} exams max** to prevent session timeout. For full bulk, use **GitHub Actions** (auto-runs every Monday 9 AM, or trigger manually from Actions tab).")
         if no_exam_selected:
-            st.info("💡 Select 1–2 exams to run an update. For the full keyword scan, use GitHub Actions.")
+            st.info("💡 You can select only 1–2 exams to run an update.")
 
         df = final_view.copy()
         if sel_exam:            df = df[df['exam'].isin(sel_exam)]
