@@ -237,6 +237,8 @@ with tab1:
         final_view['cluster'] = final_view['cluster'].fillna("").astype(str).str.strip().replace(['nan','None'],"")
         final_view['cluster'] = final_view['cluster'].apply(lambda x: x.title() if x else "Others")
 
+        MAX_EXAMS_FOR_MANUAL_RUN = 2  # Safety limit. Full bulk = GitHub Actions only.
+
         f1, f2, f3, f4, f5 = st.columns(5)
         sel_exam    = f1.multiselect("Exam",   sorted(final_view['exam'].unique()),   placeholder="All Exams")
         avail_clusters = sorted(final_view[final_view['exam'].isin(sel_exam)]['cluster'].unique()) if sel_exam else sorted(final_view['cluster'].unique())
@@ -246,6 +248,15 @@ with tab1:
         sel_bucket  = f5.multiselect("Bucket", sorted(final_view['Bucket'].unique()), placeholder="All Buckets")
         st.write("")
         sel_custom_keywords = st.multiselect("🎯 Select Specific Keywords (Optional)", sorted(final_view['keyword'].unique()))
+
+        # Exam limit guard
+        too_many_exams   = len(sel_exam) > MAX_EXAMS_FOR_MANUAL_RUN
+        no_exam_selected = len(sel_exam) == 0 and not sel_custom_keywords
+
+        if too_many_exams:
+            st.warning(f"⚠️ You selected **{len(sel_exam)} exams**. Manual run limit is **{MAX_EXAMS_FOR_MANUAL_RUN} exams max** to prevent session timeout. For full bulk, use **GitHub Actions** (auto-runs every Monday 9 AM, or trigger manually from Actions tab).")
+        if no_exam_selected:
+            st.info("💡 Select 1–2 exams to run an update. For the full keyword scan, use GitHub Actions.")
 
         df = final_view.copy()
         if sel_exam:            df = df[df['exam'].isin(sel_exam)]
@@ -270,8 +281,10 @@ with tab1:
             m3.metric("Base Context", base_count, help=f"Count of {base_lbl}")
 
         st.markdown("---")
-        est_cost = len(df) * 0.0035 * USD_TO_INR
-        can_run  = (spent_inr + est_cost) <= LIMIT_INR if LOCK_ACTIVE else True
+        est_cost   = len(df) * 0.0035 * USD_TO_INR
+        budget_ok  = (spent_inr + est_cost) <= LIMIT_INR if LOCK_ACTIVE else True
+        exam_ok    = (not too_many_exams) and (not no_exam_selected)
+        can_run    = budget_ok and exam_ok
 
         col_btn2, col_msg = st.columns([1, 4])
         with col_btn2:
@@ -286,7 +299,9 @@ with tab1:
                     submit  = c1.form_submit_button("✅ Confirm & Run")
                     cancel  = c2.form_submit_button("❌ Cancel")
                     if submit:
-                        if run_pass == st.secrets["RUN_UPDATE_PASSWORD"]:
+                        if len(sel_exam) > MAX_EXAMS_FOR_MANUAL_RUN:
+                            st.error(f"❌ Cannot run — {len(sel_exam)} exams selected. Max allowed: {MAX_EXAMS_FOR_MANUAL_RUN}.")
+                        elif run_pass == st.secrets["RUN_UPDATE_PASSWORD"]:
                             st.session_state['pending_update_list'] = df.to_dict('records')
                             st.session_state['is_running']          = True
                             st.rerun()
@@ -295,8 +310,10 @@ with tab1:
                         st.session_state['show_run_dialog'] = False
                         st.rerun()
         with col_msg:
-            if not can_run: st.error("Insufficient Budget")
-            else: st.caption("Updates visible keywords. Email will be sent for changed ranks.")
+            if not budget_ok:    st.error("⛔ Insufficient Budget")
+            elif too_many_exams: st.error(f"⛔ Max {MAX_EXAMS_FOR_MANUAL_RUN} exams allowed. Use GitHub Actions for full bulk.")
+            elif no_exam_selected: st.caption("👆 Select an exam first to enable the run button.")
+            else: st.caption(f"Estimated cost: ₹{est_cost:.0f} | Email will be sent after completion.")
 
         def highlight_alert(row):
             s = row['Alert']
