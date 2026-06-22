@@ -1,0 +1,51 @@
+name: Keep Alive
+
+# ──────────────────────────────────────────────────────────────
+# WHY THIS FILE EXISTS
+# GitHub automatically DISABLES any scheduled workflow that has
+# not had a successful run in the last 60 days. This can happen
+# even if you are actively committing code to the repo — GitHub
+# only looks at whether the workflow itself ran, not commits.
+#
+# This file solves that permanently by running every 50 days
+# and re-enabling the main SEO workflow via GitHub API, so it
+# can never be silently disabled again.
+#
+# YOU DO NOT NEED TO TOUCH THIS FILE EVER.
+# ──────────────────────────────────────────────────────────────
+
+on:
+  schedule:
+    # Runs every 50 days (well within the 60-day disable window)
+    # Cron does not support "every N days" directly, so we use
+    # specific dates: 1st and 20th of every month covers ~50-day gaps
+    - cron: '0 2 1,20 * *'   # 2:00 AM UTC on 1st and 20th of every month
+
+  # Also allow manual trigger if needed
+  workflow_dispatch:
+
+jobs:
+  keep_alive:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Re-enable SEO Rank Update Robot workflow
+        run: |
+          echo "🔄 Pinging GitHub API to keep SEO Rank Update Robot enabled..."
+
+          RESPONSE=$(curl -s -o /dev/null -w "%{http_code}" \
+            -X PUT \
+            -H "Authorization: token ${{ secrets.KEEP_ALIVE_TOKEN }}" \
+            -H "Accept: application/vnd.github.v3+json" \
+            "https://api.github.com/repos/${{ github.repository }}/actions/workflows/daily_update.yml/enable")
+
+          if [ "$RESPONSE" = "204" ]; then
+            echo "✅ Success — SEO Rank Update Robot is enabled and will run next Monday 9 AM IST."
+          else
+            echo "⚠️ Unexpected response code: $RESPONSE"
+            echo "The workflow may already be enabled, or the token may need refreshing."
+          fi
+
+      - name: Confirm status
+        run: |
+          echo "Keep-alive ping complete. Next ping will run in ~20 days."
+          echo "Main SEO workflow runs every Monday at 9:00 AM IST automatically."

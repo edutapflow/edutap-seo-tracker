@@ -6,11 +6,11 @@ on:
     # 🕒 CHANGE TIME HERE
     # Syntax: 'minute hour day(month) month day(week)'
     # UTC Time! (India is UTC+5:30)
-    # Currently set to: Every Tuesday at 02:30 UTC (08:00 AM IST)
+    # Currently set to: Every Monday at 03:30 UTC (09:00 AM IST)
     # -------------------------------------------------------
     - cron: '30 3 * * 1'
-  
-  # This allows you to run it manually from GitHub just to test
+
+  # Allows manual trigger from GitHub Actions tab
   workflow_dispatch:
 
 jobs:
@@ -31,12 +31,10 @@ jobs:
 
       - name: Run Update Script
         env:
-          # We pass the secrets from GitHub to the script
           API_LOGIN: ${{ secrets.API_LOGIN }}
           API_PASSWORD: ${{ secrets.API_PASSWORD }}
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
-          # --- ADDED THESE MISSING LINES BELOW ---
           EMAIL_SENDER: ${{ secrets.EMAIL_SENDER }}
           EMAIL_PASSWORD: ${{ secrets.EMAIL_PASSWORD }}
         run: python cron_job.py
