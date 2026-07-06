@@ -1,16 +1,14 @@
 name: SEO Rank Update Robot
 
 on:
-  schedule:
-    # -------------------------------------------------------
-    # 🕒 CHANGE TIME HERE
-    # Syntax: 'minute hour day(month) month day(week)'
-    # UTC Time! (India is UTC+5:30)
-    # Currently set to: Every Monday at 03:30 UTC (09:00 AM IST)
-    # -------------------------------------------------------
-    - cron: '30 3 * * 1'
-
-  # Allows manual trigger from GitHub Actions tab
+  # -------------------------------------------------------
+  # NO schedule here intentionally.
+  # This workflow is triggered ONLY by cron-job.org
+  # which calls the workflow_dispatch event at exactly
+  # 9:00 AM IST every Monday. Removing the GitHub schedule
+  # prevents double-runs (GitHub scheduler + cron-job.org).
+  # To trigger manually: GitHub Actions tab → Run workflow
+  # -------------------------------------------------------
   workflow_dispatch:
 
 jobs:
@@ -18,12 +16,12 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
-        uses: actions/checkout@v2
+        uses: actions/checkout@v4
 
       - name: Set up Python
-        uses: actions/setup-python@v2
+        uses: actions/setup-python@v5
         with:
-          python-version: '3.9'
+          python-version: '3.11'
 
       - name: Install dependencies
         run: |
