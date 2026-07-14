@@ -84,6 +84,21 @@ def get_live_usd_inr_rate():
     except: pass
     return 90.0
 
+def get_dataforseo_balance():
+    """Fetch current DataForSEO account balance in USD."""
+    try:
+        url  = "https://api.dataforseo.com/v3/appendix/user_data"
+        auth = "Basic " + base64.b64encode(f"{API_LOGIN}:{API_PASSWORD}".encode()).decode()
+        headers = {'Authorization': auth, 'Content-Type': 'application/json'}
+        response = requests.get(url, headers=headers, timeout=10)
+        if response.status_code == 200:
+            data = response.json()
+            balance = data['tasks'][0]['result'][0]['money']['balance']
+            return float(balance)
+    except Exception as e:
+        print(f"⚠️ Could not fetch DataForSEO balance: {e}")
+    return None
+
 def get_all_keywords(): return fetch_all_rows("keywords_master")
 
 def fetch_run_ids(last_n=10):
@@ -495,7 +510,7 @@ def perform_update(keywords_list, progress_bar=None, status_text=None, run_type=
 # ─────────────────────────────────────────────
 # EMAIL
 # ─────────────────────────────────────────────
-def send_email_alert(alerts_dict, subject_prefix="Automatic Run", all_checked_data=None):
+def send_email_alert(alerts_dict, subject_prefix="Automatic Run", all_checked_data=None, run_cost=None, dataforseo_balance=None):
     recipients = [e.strip() for e in EMAIL_RECEIVER.split(",")] if "," in EMAIL_RECEIVER else [EMAIL_RECEIVER]
     ist_now    = datetime.utcnow() + timedelta(hours=5, minutes=30)
     date_label = ist_now.strftime('%d %b %Y')
@@ -521,9 +536,21 @@ def send_email_alert(alerts_dict, subject_prefix="Automatic Run", all_checked_da
         html += "</table><br>"
         return html
 
+    # ── Low balance urgent flag ───────────────────────────────────
+    low_balance = dataforseo_balance is not None and dataforseo_balance < 5
+
     if has_alerts:
-        msg['Subject'] = f"{subject_prefix}: SEO Alert ({date_label})"
-        html_body  = f"<h2>📉 {subject_prefix} Report ({date_label})</h2><p>Significant rank changes:</p>"
+        subj_suffix = " ⚠️ TOP UP DATAFORSEO NOW" if low_balance else ""
+        msg['Subject'] = f"{subject_prefix}: SEO Alert ({date_label}){subj_suffix}"
+        html_body  = f"<h2>📉 {subject_prefix} Report ({date_label})</h2>"
+        if low_balance:
+            html_body += (
+                f"<div style='background:#c0392b;color:white;padding:10px 14px;"
+                f"border-radius:6px;font-size:14px;margin-bottom:12px;'>"
+                f"🚨 <b>URGENT: DataForSEO balance is critically low (${dataforseo_balance:.4f}). "
+                f"Please top up immediately — the next run will fail without sufficient balance.</b></div>"
+            )
+        html_body += "<p>Significant rank changes:</p>"
         if alerts_dict["red"]:
             html_body += "<h3 style='color:red;'>🔴 Critical: Dropped out of Top 10</h3>" + generate_grouped_table(alerts_dict["red"])
         if alerts_dict["orange"]:
@@ -533,13 +560,55 @@ def send_email_alert(alerts_dict, subject_prefix="Automatic Run", all_checked_da
         if alerts_dict["green"]:
             html_body += "<h3 style='color:green;'>🟢 Celebration: Entered Top 3!</h3>" + generate_grouped_table(alerts_dict["green"])
     elif is_manual and all_checked_data:
-        msg['Subject'] = f"{subject_prefix}: Report Completed ({date_label})"
-        html_body  = f"<h2>✅ Manual Run Completed ({date_label})</h2><p>No significant alerts. Full status:</p>"
+        subj_suffix = " ⚠️ TOP UP DATAFORSEO NOW" if low_balance else ""
+        msg['Subject'] = f"{subject_prefix}: Report Completed ({date_label}){subj_suffix}"
+        html_body  = f"<h2>✅ Manual Run Completed ({date_label})</h2>"
+        if low_balance:
+            html_body += (
+                f"<div style='background:#c0392b;color:white;padding:10px 14px;"
+                f"border-radius:6px;font-size:14px;margin-bottom:12px;'>"
+                f"🚨 <b>URGENT: DataForSEO balance is critically low (${dataforseo_balance:.4f}). "
+                f"Please top up immediately — the next run will fail without sufficient balance.</b></div>"
+            )
+        html_body += "<p>No significant alerts. Full status:</p>"
         html_body += generate_grouped_table(all_checked_data)
     else:
-        msg['Subject'] = f"{subject_prefix}: All Stable ({date_label})"
+        subj_suffix = " ⚠️ TOP UP DATAFORSEO NOW" if low_balance else ""
+        msg['Subject'] = f"{subject_prefix}: All Stable ({date_label}){subj_suffix}"
         html_body  = f"<h2>✅ Automatic Update Completed ({date_label})</h2>"
+        if low_balance:
+            html_body += (
+                f"<div style='background:#c0392b;color:white;padding:10px 14px;"
+                f"border-radius:6px;font-size:14px;margin-bottom:12px;'>"
+                f"🚨 <b>URGENT: DataForSEO balance is critically low (${dataforseo_balance:.4f}). "
+                f"Please top up immediately — the next run will fail without sufficient balance.</b></div>"
+            )
         html_body += "<p>No significant drops or changes detected. All keywords stable.</p>"
+
+    # ── Cost & Balance footer (shown in every email) ──────────────
+    footer_lines = []
+    if run_cost is not None:
+        footer_lines.append(f"<b>This run cost:</b> ${run_cost:.4f}")
+    if dataforseo_balance is not None:
+        if dataforseo_balance < 5:
+            bal_color = "#c0392b"; bal_icon = "🔴"
+        elif dataforseo_balance < 20:
+            bal_color = "#e67e22"; bal_icon = "🟠"
+        else:
+            bal_color = "#27ae60"; bal_icon = "🟢"
+        footer_lines.append(
+            f"<b>DataForSEO balance:</b> "
+            f"<span style='color:{bal_color};'>{bal_icon} ${dataforseo_balance:.4f}</span>"
+        )
+    if footer_lines:
+        html_body += (
+            "<br><hr style='border:1px solid #ddd;'>"
+            "<div style='background:#f8f9fa;padding:10px 14px;border-radius:6px;"
+            "font-size:13px;color:#555;margin-top:8px;'>"
+            "💰 <b>Run Summary</b><br><br>"
+            + "<br>".join(footer_lines)
+            + "</div>"
+        )
 
     msg.attach(MIMEText(html_body, 'html'))
     try:
