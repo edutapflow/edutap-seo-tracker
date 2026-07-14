@@ -1,6 +1,6 @@
 # FORCE UPDATE V7 - FIXED PREV/CURR SWAP + RUN LOGS
 import pandas as pd
-from backend_utils import perform_update, fetch_all_rows, send_email_alert, build_prev_map_safe
+from backend_utils import perform_update, fetch_all_rows, send_email_alert, build_prev_map_safe, get_dataforseo_balance
 
 def run_automation():
     print("🤖 Robot: Starting scheduled update...")
@@ -40,7 +40,17 @@ def run_automation():
 
     # 5. Send Email
     print("   ... Sending Email Alert")
-    send_email_alert(alerts, subject_prefix="📅 Weekly Automatic Run", all_checked_data=None)
+    # Fetch DataForSEO balance right before sending email
+    print("   ... Fetching DataForSEO balance")
+    dfs_balance = get_dataforseo_balance()
+
+    send_email_alert(
+        alerts,
+        subject_prefix="📅 Weekly Automatic Run",
+        all_checked_data=None,
+        run_cost=cost,
+        dataforseo_balance=dfs_balance
+    )
 
     print(f"✅ Robot: Update Complete & Email Sent! Cost: ${cost:.4f}")
 
