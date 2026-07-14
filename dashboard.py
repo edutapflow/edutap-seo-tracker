@@ -251,7 +251,8 @@ with tab1:
         avail_clusters = sorted(final_view[final_view['exam'].isin(sel_exam)]['cluster'].unique()) if sel_exam else sorted(final_view['cluster'].unique())
         sel_cluster = f2.multiselect("Cluster", avail_clusters, placeholder="All Clusters")
         sel_type    = f3.selectbox("Type",  ["All"] + sorted(final_view['type'].unique().tolist()))
-        sel_check   = f4.selectbox("Check", ["All"] + sorted(final_view['Keyword Check'].unique().tolist()))
+        check_opts  = sorted(final_view['Keyword Check'].unique().tolist()) if 'Keyword Check' in final_view.columns else []
+        sel_check   = f4.selectbox("Check", ["All"] + check_opts)
         sel_bucket  = f5.multiselect("Bucket", sorted(final_view['Bucket'].unique()), placeholder="All Buckets")
         st.write("")
         sel_custom_keywords = st.multiselect("🎯 Select Specific Keywords (Optional)", sorted(final_view['keyword'].unique()))
@@ -288,8 +289,9 @@ with tab1:
             m3.metric("Base Context", base_count, help=f"Count of {base_lbl}")
 
         st.markdown("---")
-        est_cost   = len(df) * 0.0035 * USD_TO_INR
-        budget_ok  = (spent_inr + est_cost) <= LIMIT_INR if LOCK_ACTIVE else True
+        est_cost_usd = len(df) * 0.0035
+        est_cost_inr = est_cost_usd * USD_TO_INR
+        budget_ok  = (spent_inr + est_cost_inr) <= LIMIT_INR if LOCK_ACTIVE else True
         exam_ok    = (not too_many_exams) and (not no_exam_selected)
         can_run    = budget_ok and exam_ok
 
@@ -320,7 +322,7 @@ with tab1:
             if not budget_ok:    st.error("⛔ Insufficient Budget")
             elif too_many_exams: st.error(f"⛔ Max {MAX_EXAMS_FOR_MANUAL_RUN} exams allowed. Use GitHub Actions for full bulk.")
             elif no_exam_selected: st.caption("👆 Select an exam first to enable the run button.")
-            else: st.caption(f"Estimated cost: ₹{est_cost:.0f} | Email will be sent after completion.")
+            else: st.caption(f"Estimated cost: ${est_cost_usd:.4f} (≈ ₹{est_cost_inr:.0f}) | Email will be sent after completion.")
 
         def highlight_alert(row):
             s = row['Alert']
@@ -553,6 +555,10 @@ with tab6:
     st.caption("Every keyword result and error from each DataForSEO run — in plain English.")
 
     # ── Separate password lock for this tab ──────────────────────────────
+    # NOTE: We use if/else NOT st.stop() here.
+    # st.stop() kills the entire Streamlit app, causing logout when any
+    # widget interaction (like selecting an exam filter) triggers a rerun
+    # while this tab's password hasn't been entered yet.
     if not st.session_state['logs_unlocked']:
         st.warning("🔒 This section is separately protected.")
         with st.form("logs_unlock_form"):
@@ -564,17 +570,16 @@ with tab6:
                     st.rerun()
                 else:
                     st.error("❌ Incorrect password.")
-        st.stop()
-
-    # ── Unlocked ─────────────────────────────────────────────────────────
-    st.success("✅ Access granted.")
-
-    # Fetch list of recent run_ids
-    run_ids_info = fetch_run_ids(last_n=10)
-
-    if not run_ids_info:
-        st.info("No run logs found yet. Logs will appear here after the first update run.")
     else:
+        # ── Unlocked ─────────────────────────────────────────────────────
+        st.success("✅ Access granted.")
+
+        # Fetch list of recent run_ids
+        run_ids_info = fetch_run_ids(last_n=10)
+
+        if not run_ids_info:
+            st.info("No run logs found yet. Logs will appear here after the first update run.")
+        else:
         # Build a readable label for each run
         run_options = {}
         for r in run_ids_info:
