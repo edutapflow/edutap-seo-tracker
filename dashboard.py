@@ -7,7 +7,7 @@ from backend_utils import (
     perform_update, get_all_keywords, add_keyword, delete_bulk_keywords,
     process_bulk_upload, normalize_url, get_current_month_cost,
     get_live_usd_inr_rate, clear_master_database, supabase,
-    fetch_all_rows, send_email_alert, build_prev_map_safe,
+    fetch_all_rows, send_email_alert, build_prev_map_safe, get_dataforseo_balance,
     fetch_run_ids, fetch_logs_for_run
 )
 
@@ -216,7 +216,14 @@ with tab1:
                 elif prev_rank <= 3 and curr_rank > 3:          alerts["yellow"].append(alert_obj)
                 elif prev_rank > 3 and curr_rank <= 3:          alerts["green"].append(alert_obj)
 
-            send_email_alert(alerts, subject_prefix="🛠️ Manual Run", all_checked_data=all_checked_data)
+            dfs_balance = get_dataforseo_balance()
+            send_email_alert(
+                alerts,
+                subject_prefix="🛠️ Manual Run",
+                all_checked_data=all_checked_data,
+                run_cost=r_cost,
+                dataforseo_balance=dfs_balance
+            )
             st.session_state['last_run_date'] = r_date; st.session_state['last_run_cost'] = r_cost
             st.session_state['is_running']    = False;  st.session_state['show_run_dialog'] = False
             del st.session_state['pending_update_list']
