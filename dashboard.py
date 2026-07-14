@@ -580,122 +580,122 @@ with tab6:
         if not run_ids_info:
             st.info("No run logs found yet. Logs will appear here after the first update run.")
         else:
-        # Build a readable label for each run
-        run_options = {}
-        for r in run_ids_info:
-            rid  = r['run_id']
-            rtyp = r.get('run_type', 'manual').capitalize()
-            label = f"{rid} IST  [{rtyp}]"
-            run_options[label] = rid
+            # Build a readable label for each run
+            run_options = {}
+            for r in run_ids_info:
+                rid  = r['run_id']
+                rtyp = r.get('run_type', 'manual').capitalize()
+                label = f"{rid} IST  [{rtyp}]"
+                run_options[label] = rid
 
-        selected_label = st.selectbox(
-            "📅 Select a Run to inspect:",
-            list(run_options.keys())
-        )
-        selected_run_id = run_options[selected_label]
-
-        # Load logs for this run
-        with st.spinner("Loading log entries..."):
-            logs_df = fetch_logs_for_run(selected_run_id)
-
-        if logs_df.empty:
-            st.warning("No log entries found for this run.")
-        else:
-            # ── Summary metrics ───────────────────────────────────────────
-            total_kws   = len(logs_df[logs_df['level'].isin(['success','info']) & (logs_df['keyword'] != "")])
-            ranked       = len(logs_df[logs_df['level'] == 'success'])
-            not_ranked   = len(logs_df[(logs_df['level'] == 'info') & (logs_df['keyword'] != "")])
-            warnings_ct  = len(logs_df[logs_df['level'] == 'warning'])
-            errors_ct    = len(logs_df[logs_df['level'] == 'error'])
-
-            m1, m2, m3, m4, m5 = st.columns(5)
-            m1.metric("Total Processed", total_kws)
-            m2.metric("✅ Ranked (Top 20)", ranked)
-            m3.metric("⬜ Not in Top 20", not_ranked)
-            m4.metric("⚠️ Warnings", warnings_ct)
-            m5.metric("❌ Errors", errors_ct)
-
-            st.divider()
-
-            # ── Filters ───────────────────────────────────────────────────
-            fc1, fc2, fc3 = st.columns(3)
-            level_filter = fc1.multiselect(
-                "Filter by Level:",
-                ["success", "info", "warning", "error"],
-                default=["success", "warning", "error"],
-                format_func=lambda x: {"success":"✅ Ranked","info":"⬜ Not Ranked","warning":"⚠️ Warning","error":"❌ Error"}[x]
+            selected_label = st.selectbox(
+                "📅 Select a Run to inspect:",
+                list(run_options.keys())
             )
-            exam_opts = ["All"] + sorted(logs_df[logs_df['exam'] != ""]["exam"].unique().tolist())
-            exam_filter = fc2.selectbox("Filter by Exam:", exam_opts)
-            search_kw   = fc3.text_input("🔍 Search keyword:")
+            selected_run_id = run_options[selected_label]
 
-            filtered = logs_df[logs_df['level'].isin(level_filter)]
-            if exam_filter != "All": filtered = filtered[filtered['exam'] == exam_filter]
-            if search_kw: filtered = filtered[filtered['keyword'].str.contains(search_kw, case=False, na=False)]
+            # Load logs for this run
+            with st.spinner("Loading log entries..."):
+                logs_df = fetch_logs_for_run(selected_run_id)
 
-            st.caption(f"Showing {len(filtered)} log entries")
-            st.divider()
+            if logs_df.empty:
+                st.warning("No log entries found for this run.")
+            else:
+                # ── Summary metrics ───────────────────────────────────────────
+                total_kws   = len(logs_df[logs_df['level'].isin(['success','info']) & (logs_df['keyword'] != "")])
+                ranked       = len(logs_df[logs_df['level'] == 'success'])
+                not_ranked   = len(logs_df[(logs_df['level'] == 'info') & (logs_df['keyword'] != "")])
+                warnings_ct  = len(logs_df[logs_df['level'] == 'warning'])
+                errors_ct    = len(logs_df[logs_df['level'] == 'error'])
 
-            # ── Log entries rendered as readable cards ────────────────────
-            LEVEL_CONFIG = {
-                "success": ("✅", "#d4edda", "#155724"),
-                "info":    ("⬜", "#f0f0f0", "#333333"),
-                "warning": ("⚠️", "#fff3cd", "#856404"),
-                "error":   ("❌", "#f8d7da", "#721c24"),
-            }
+                m1, m2, m3, m4, m5 = st.columns(5)
+                m1.metric("Total Processed", total_kws)
+                m2.metric("✅ Ranked (Top 20)", ranked)
+                m3.metric("⬜ Not in Top 20", not_ranked)
+                m4.metric("⚠️ Warnings", warnings_ct)
+                m5.metric("❌ Errors", errors_ct)
 
-            # Group by exam for better readability
-            if not filtered.empty:
-                # Show system messages (no keyword) first
-                sys_rows = filtered[filtered['keyword'] == ""]
-                kw_rows  = filtered[filtered['keyword'] != ""]
+                st.divider()
 
-                if not sys_rows.empty:
-                    st.markdown("#### 🤖 Run System Messages")
-                    for _, row in sys_rows.iterrows():
-                        icon, bg, fg = LEVEL_CONFIG.get(row['level'], ("•","#fff","#000"))
-                        st.markdown(
-                            f"<div style='background:{bg};color:{fg};padding:8px 12px;"
-                            f"border-radius:6px;margin-bottom:4px;font-size:13px;'>"
-                            f"{icon} <b>{row.get('logged_at','')}</b> — {row['message']}</div>",
-                            unsafe_allow_html=True
-                        )
-                    st.divider()
+                # ── Filters ───────────────────────────────────────────────────
+                fc1, fc2, fc3 = st.columns(3)
+                level_filter = fc1.multiselect(
+                    "Filter by Level:",
+                    ["success", "info", "warning", "error"],
+                    default=["success", "warning", "error"],
+                    format_func=lambda x: {"success":"✅ Ranked","info":"⬜ Not Ranked","warning":"⚠️ Warning","error":"❌ Error"}[x]
+                )
+                exam_opts = ["All"] + sorted(logs_df[logs_df['exam'] != ""]["exam"].unique().tolist())
+                exam_filter = fc2.selectbox("Filter by Exam:", exam_opts)
+                search_kw   = fc3.text_input("🔍 Search keyword:")
 
-                if not kw_rows.empty:
-                    # Group keyword rows by exam
-                    exam_groups = kw_rows['exam'].unique()
-                    for exam_name in sorted(exam_groups):
-                        exam_rows = kw_rows[kw_rows['exam'] == exam_name]
-                        with st.expander(
-                            f"📚 {exam_name}  —  {len(exam_rows)} entries  "
-                            f"| ✅ {len(exam_rows[exam_rows['level']=='success'])} ranked  "
-                            f"| ❌ {len(exam_rows[exam_rows['level']=='error'])} errors",
-                            expanded=(exam_name == exam_groups[0])
-                        ):
-                            for _, row in exam_rows.iterrows():
-                                icon, bg, fg = LEVEL_CONFIG.get(row['level'], ("•","#fff","#000"))
-                                kw_part    = f"<b>{row['keyword']}</b>" if row['keyword'] else ""
-                                type_badge = f"<span style='background:#6c757d;color:white;padding:1px 6px;border-radius:4px;font-size:11px;'>{row.get('kw_type','')}</span>" if row.get('kw_type') else ""
-                                time_part  = f"<span style='color:#888;font-size:11px;'>{row.get('logged_at','')[:19]}</span>"
-                                msg_part   = row['message']
+                filtered = logs_df[logs_df['level'].isin(level_filter)]
+                if exam_filter != "All": filtered = filtered[filtered['exam'] == exam_filter]
+                if search_kw: filtered = filtered[filtered['keyword'].str.contains(search_kw, case=False, na=False)]
 
-                                st.markdown(
-                                    f"<div style='background:{bg};color:{fg};padding:6px 12px;"
-                                    f"border-radius:6px;margin-bottom:3px;font-size:13px;'>"
-                                    f"{icon} {time_part}  {type_badge}  {kw_part}<br>"
-                                    f"<span style='margin-left:20px;'>{msg_part}</span></div>",
-                                    unsafe_allow_html=True
-                                )
+                st.caption(f"Showing {len(filtered)} log entries")
+                st.divider()
 
-            st.divider()
+                # ── Log entries rendered as readable cards ────────────────────
+                LEVEL_CONFIG = {
+                    "success": ("✅", "#d4edda", "#155724"),
+                    "info":    ("⬜", "#f0f0f0", "#333333"),
+                    "warning": ("⚠️", "#fff3cd", "#856404"),
+                    "error":   ("❌", "#f8d7da", "#721c24"),
+                }
 
-            # ── Raw table download ────────────────────────────────────────
-            with st.expander("📥 Download full log as table"):
-                dl_df = filtered[['logged_at','level','exam','kw_type','keyword','rank','ranked_url','message']].copy()
-                dl_df.columns = ['Time','Level','Exam','Type','Keyword','Rank','Ranked URL','Message']
-                st.dataframe(dl_df, use_container_width=True, hide_index=True)
-                csv = dl_df.to_csv(index=False).encode('utf-8')
-                st.download_button("⬇️ Download CSV", csv,
-                                   file_name=f"run_log_{selected_run_id[:10]}.csv",
-                                   mime="text/csv")
+                # Group by exam for better readability
+                if not filtered.empty:
+                    # Show system messages (no keyword) first
+                    sys_rows = filtered[filtered['keyword'] == ""]
+                    kw_rows  = filtered[filtered['keyword'] != ""]
+
+                    if not sys_rows.empty:
+                        st.markdown("#### 🤖 Run System Messages")
+                        for _, row in sys_rows.iterrows():
+                            icon, bg, fg = LEVEL_CONFIG.get(row['level'], ("•","#fff","#000"))
+                            st.markdown(
+                                f"<div style='background:{bg};color:{fg};padding:8px 12px;"
+                                f"border-radius:6px;margin-bottom:4px;font-size:13px;'>"
+                                f"{icon} <b>{row.get('logged_at','')}</b> — {row['message']}</div>",
+                                unsafe_allow_html=True
+                            )
+                        st.divider()
+
+                    if not kw_rows.empty:
+                        # Group keyword rows by exam
+                        exam_groups = kw_rows['exam'].unique()
+                        for exam_name in sorted(exam_groups):
+                            exam_rows = kw_rows[kw_rows['exam'] == exam_name]
+                            with st.expander(
+                                f"📚 {exam_name}  —  {len(exam_rows)} entries  "
+                                f"| ✅ {len(exam_rows[exam_rows['level']=='success'])} ranked  "
+                                f"| ❌ {len(exam_rows[exam_rows['level']=='error'])} errors",
+                                expanded=(exam_name == exam_groups[0])
+                            ):
+                                for _, row in exam_rows.iterrows():
+                                    icon, bg, fg = LEVEL_CONFIG.get(row['level'], ("•","#fff","#000"))
+                                    kw_part    = f"<b>{row['keyword']}</b>" if row['keyword'] else ""
+                                    type_badge = f"<span style='background:#6c757d;color:white;padding:1px 6px;border-radius:4px;font-size:11px;'>{row.get('kw_type','')}</span>" if row.get('kw_type') else ""
+                                    time_part  = f"<span style='color:#888;font-size:11px;'>{row.get('logged_at','')[:19]}</span>"
+                                    msg_part   = row['message']
+
+                                    st.markdown(
+                                        f"<div style='background:{bg};color:{fg};padding:6px 12px;"
+                                        f"border-radius:6px;margin-bottom:3px;font-size:13px;'>"
+                                        f"{icon} {time_part}  {type_badge}  {kw_part}<br>"
+                                        f"<span style='margin-left:20px;'>{msg_part}</span></div>",
+                                        unsafe_allow_html=True
+                                    )
+
+                st.divider()
+
+                # ── Raw table download ────────────────────────────────────────
+                with st.expander("📥 Download full log as table"):
+                    dl_df = filtered[['logged_at','level','exam','kw_type','keyword','rank','ranked_url','message']].copy()
+                    dl_df.columns = ['Time','Level','Exam','Type','Keyword','Rank','Ranked URL','Message']
+                    st.dataframe(dl_df, use_container_width=True, hide_index=True)
+                    csv = dl_df.to_csv(index=False).encode('utf-8')
+                    st.download_button("⬇️ Download CSV", csv,
+                                       file_name=f"run_log_{selected_run_id[:10]}.csv",
+                                       mime="text/csv")
