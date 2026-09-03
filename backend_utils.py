@@ -6,10 +6,15 @@ import base64
 import smtplib
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
+from email.mime.application import MIMEApplication
+from io import BytesIO
 from datetime import datetime, timedelta
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from supabase import create_client, Client
 from itertools import groupby
+from openpyxl import Workbook
+from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+from openpyxl.utils import get_column_letter
 from config import API_LOGIN, API_PASSWORD, SUPABASE_URL, SUPABASE_KEY, EMAIL_SENDER, EMAIL_PASSWORD, EMAIL_RECEIVER
 
 # --- CONNECT TO CLOUD ---
@@ -620,3 +625,249 @@ def send_email_alert(alerts_dict, subject_prefix="Automatic Run", all_checked_da
         print("📧 Email Sent Successfully!")
     except Exception as e:
         print(f"❌ Email failed: {e}")
+
+# ─────────────────────────────────────────────
+# WEEKLY AUTOMATIC EMAIL — XLSX ATTACHMENT ONLY
+# Keeps the existing manual email function above unchanged.
+# ─────────────────────────────────────────────
+def _display_rank_for_excel(value):
+    """Convert the internal 101 sentinel to a user-friendly Excel value."""
+    try:
+        rank = int(value)
+        return rank if rank <= 20 else "Not in Top 20"
+    except (TypeError, ValueError):
+        return "No Result"
+
+
+def _build_weekly_excel_report(master_df, results_data, run_date):
+    """Build a formatted one-sheet XLSX containing the full current keyword dataset."""
+    result_map = {
+        str(row.get("keyword", "")).strip(): row
+        for row in (results_data or [])
+        if str(row.get("keyword", "")).strip()
+    }
+
+    try:
+        run_dt = datetime.strptime(str(run_date), "%Y-%m-%d %H:%M")
+    except (TypeError, ValueError):
+        run_dt = datetime.utcnow() + timedelta(hours=5, minutes=30)
+
+    date_label = run_dt.strftime("%d %b %Y")
+    file_date = run_dt.strftime("%Y-%m-%d")
+    filename = f"EduTap_SEO_Weekly_Report_{file_date}.xlsx"
+
+    headers = [
+        "Exam", "Cluster", "Keyword", "Type", "Volume", "Target URL",
+        "Current Rank", "Ranked URL", "Target Rank", "Bucket",
+        "Anuj Jindal Rank", "Anuj Jindal URL",
+        "CareerPower Rank", "CareerPower URL",
+        "Testbook Rank", "Testbook URL",
+        "Oliveboard Rank", "Oliveboard URL",
+        "Adda247 Rank", "Adda247 URL",
+        "ixamBee Rank", "ixamBee URL",
+    ]
+
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "All Keywords"
+    ws.sheet_view.showGridLines = False
+
+    last_col = get_column_letter(len(headers))
+    ws.merge_cells(f"A1:{last_col}1")
+    ws["A1"] = "EduTap SEO Weekly Keyword Report"
+    ws["A1"].font = Font(size=16, bold=True, color="FFFFFF")
+    ws["A1"].fill = PatternFill("solid", fgColor="0097A8")
+    ws["A1"].alignment = Alignment(horizontal="left", vertical="center")
+    ws.row_dimensions[1].height = 26
+
+    ws.merge_cells(f"A2:{last_col}2")
+    ws["A2"] = f"Run Date: {date_label} | Total Keywords: {len(master_df)}"
+    ws["A2"].font = Font(size=10, color="666666")
+    ws["A2"].alignment = Alignment(horizontal="left", vertical="center")
+    ws.row_dimensions[2].height = 20
+
+    header_row = 4
+    header_fill = PatternFill("solid", fgColor="1F4E78")
+    header_font = Font(bold=True, color="FFFFFF")
+    header_border = Border(bottom=Side(style="medium", color="0097A8"))
+
+    for col_idx, header in enumerate(headers, start=1):
+        cell = ws.cell(row=header_row, column=col_idx, value=header)
+        cell.fill = header_fill
+        cell.font = header_font
+        cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+        cell.border = header_border
+
+    rank_columns = {7, 9, 11, 13, 15, 17, 19, 21}
+    url_columns = {6, 8, 12, 14, 16, 18, 20, 22}
+
+    light_row_fill = PatternFill("solid", fgColor="F7FBFC")
+    top3_fill = PatternFill("solid", fgColor="E2F0D9")
+    top10_fill = PatternFill("solid", fgColor="DDEBF7")
+    top20_fill = PatternFill("solid", fgColor="FFF2CC")
+    not_ranked_fill = PatternFill("solid", fgColor="FCE4D6")
+
+    data_row = header_row + 1
+    for _, master_row in master_df.iterrows():
+        keyword = str(master_row.get("keyword", "")).strip()
+        result = result_map.get(keyword, {})
+        comp_ranks = result.get("comp_ranks", {}) or {}
+        comp_urls = result.get("comp_urls", {}) or {}
+
+        values = [
+            master_row.get("exam", result.get("exam", "")),
+            master_row.get("cluster", ""),
+            keyword,
+            master_row.get("type", result.get("type", "")),
+            master_row.get("volume", 0),
+            master_row.get("target_url", ""),
+            _display_rank_for_excel(result.get("rank")),
+            result.get("url", "No Result"),
+            _display_rank_for_excel(result.get("target_rank")),
+            result.get("bucket", "No Result"),
+            _display_rank_for_excel(comp_ranks.get("anujjindal")),
+            comp_urls.get("anujjindal", ""),
+            _display_rank_for_excel(comp_ranks.get("careerpower")),
+            comp_urls.get("careerpower", ""),
+            _display_rank_for_excel(comp_ranks.get("testbook")),
+            comp_urls.get("testbook", ""),
+            _display_rank_for_excel(comp_ranks.get("oliveboard")),
+            comp_urls.get("oliveboard", ""),
+            _display_rank_for_excel(comp_ranks.get("adda247")),
+            comp_urls.get("adda247", ""),
+            _display_rank_for_excel(comp_ranks.get("ixambee")),
+            comp_urls.get("ixambee", ""),
+        ]
+
+        for col_idx, value in enumerate(values, start=1):
+            if pd.isna(value):
+                value = ""
+            elif hasattr(value, "item"):
+                try:
+                    value = value.item()
+                except Exception:
+                    pass
+
+            cell = ws.cell(row=data_row, column=col_idx, value=value)
+            cell.alignment = Alignment(vertical="top", wrap_text=(col_idx in url_columns or col_idx == 3))
+
+            if data_row % 2 == 0:
+                cell.fill = light_row_fill
+
+            if col_idx in rank_columns:
+                if isinstance(value, int):
+                    cell.alignment = Alignment(horizontal="center", vertical="center")
+                    if value <= 3:
+                        cell.fill = top3_fill
+                    elif value <= 10:
+                        cell.fill = top10_fill
+                    else:
+                        cell.fill = top20_fill
+                elif value in ("Not in Top 20", "No Result"):
+                    cell.alignment = Alignment(horizontal="center", vertical="center")
+                    cell.fill = not_ranked_fill
+
+            if col_idx in url_columns and isinstance(value, str) and value.startswith(("http://", "https://")):
+                cell.hyperlink = value
+                cell.style = "Hyperlink"
+                cell.alignment = Alignment(vertical="top", wrap_text=True)
+
+        data_row += 1
+
+    ws.freeze_panes = "A5"
+    if data_row > header_row + 1:
+        ws.auto_filter.ref = f"A{header_row}:{last_col}{data_row - 1}"
+
+    widths = {
+        1: 18, 2: 24, 3: 38, 4: 12, 5: 11, 6: 42,
+        7: 14, 8: 48, 9: 14, 10: 16,
+        11: 16, 12: 42, 13: 18, 14: 42,
+        15: 15, 16: 42, 17: 16, 18: 42,
+        19: 15, 20: 42, 21: 15, 22: 42,
+    }
+    for idx, width in widths.items():
+        ws.column_dimensions[get_column_letter(idx)].width = width
+
+    ws.row_dimensions[header_row].height = 32
+
+    output = BytesIO()
+    wb.save(output)
+    return output.getvalue(), filename, date_label
+
+
+def send_weekly_email_report(master_df, results_data, run_date, run_cost=None, dataforseo_balance=None):
+    """
+    Send the scheduled weekly email with only:
+    1) date,
+    2) formatted XLSX attachment containing all keywords,
+    3) run summary / existing balance reminder.
+
+    This function is intentionally separate from send_email_alert() so manual emails stay unchanged.
+    """
+    recipients = [e.strip() for e in EMAIL_RECEIVER.split(",")] if "," in EMAIL_RECEIVER else [EMAIL_RECEIVER]
+    excel_bytes, filename, date_label = _build_weekly_excel_report(master_df, results_data, run_date)
+
+    low_balance = dataforseo_balance is not None and dataforseo_balance < 5
+    subj_suffix = " ⚠️ TOP UP DATAFORSEO NOW" if low_balance else ""
+
+    msg = MIMEMultipart()
+    msg["From"] = EMAIL_SENDER
+    msg["To"] = ", ".join(recipients)
+    msg["Subject"] = f"📅 Weekly Automatic Run: SEO Report ({date_label}){subj_suffix}"
+
+    html_body = f"<h2>📅 {date_label}</h2>"
+    html_body += f"<p>📎 <b>Attached:</b> {filename}</p>"
+
+    # Keep the existing low-balance reminder behavior for the weekly email.
+    if low_balance:
+        html_body += (
+            f"<div style='background:#c0392b;color:white;padding:10px 14px;"
+            f"border-radius:6px;font-size:14px;margin-bottom:12px;'>"
+            f"🚨 <b>URGENT: DataForSEO balance is critically low (${dataforseo_balance:.4f}). "
+            f"Please top up immediately — the next run will fail without sufficient balance.</b></div>"
+        )
+
+    summary_lines = [f"<b>Keywords checked:</b> {len(master_df)}"]
+    if run_cost is not None:
+        summary_lines.append(f"<b>This run cost:</b> ${run_cost:.4f}")
+
+    if dataforseo_balance is not None:
+        if dataforseo_balance < 5:
+            bal_color = "#c0392b"; bal_icon = "🔴"
+        elif dataforseo_balance < 20:
+            bal_color = "#e67e22"; bal_icon = "🟠"
+        else:
+            bal_color = "#27ae60"; bal_icon = "🟢"
+        summary_lines.append(
+            f"<b>DataForSEO balance:</b> "
+            f"<span style='color:{bal_color};'>{bal_icon} ${dataforseo_balance:.4f}</span>"
+        )
+
+    html_body += (
+        "<hr style='border:1px solid #ddd;'>"
+        "<div style='background:#f8f9fa;padding:10px 14px;border-radius:6px;"
+        "font-size:13px;color:#555;margin-top:8px;'>"
+        "💰 <b>Run Summary</b><br><br>"
+        + "<br>".join(summary_lines)
+        + "</div>"
+    )
+
+    msg.attach(MIMEText(html_body, "html"))
+
+    attachment = MIMEApplication(
+        excel_bytes,
+        _subtype="vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    )
+    attachment.add_header("Content-Disposition", "attachment", filename=filename)
+    msg.attach(attachment)
+
+    try:
+        server = smtplib.SMTP("smtp.gmail.com", 587)
+        server.starttls()
+        server.login(EMAIL_SENDER, EMAIL_PASSWORD)
+        server.sendmail(EMAIL_SENDER, recipients, msg.as_string())
+        server.quit()
+        print(f"📧 Weekly XLSX Email Sent Successfully! Attachment: {filename}")
+    except Exception as e:
+        print(f"❌ Weekly email failed: {e}")
+
