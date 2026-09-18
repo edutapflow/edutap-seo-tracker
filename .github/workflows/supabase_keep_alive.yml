@@ -1,0 +1,37 @@
+name: Supabase Keep Alive
+
+on:
+  # Daily at 03:30 UTC = 09:00 IST
+  schedule:
+    - cron: '30 3 * * *'
+  workflow_dispatch:
+
+jobs:
+  ping-supabase:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Make a lightweight Supabase database request
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+        run: |
+          set -e
+
+          echo "Pinging Supabase..."
+
+          HTTP_CODE=$(curl -sS -o response.json -w "%{http_code}" \
+            "${SUPABASE_URL}/rest/v1/keywords_master?select=id&limit=1" \
+            -H "apikey: ${SUPABASE_KEY}" \
+            -H "Authorization: Bearer ${SUPABASE_KEY}" \
+            -H "Accept: application/json")
+
+          echo "HTTP status: ${HTTP_CODE}"
+          cat response.json || true
+
+          if [ "${HTTP_CODE}" -lt 200 ] || [ "${HTTP_CODE}" -ge 300 ]; then
+            echo "Supabase keep-alive failed."
+            exit 1
+          fi
+
+          echo "Supabase keep-alive succeeded."
