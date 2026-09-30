@@ -1,4 +1,4 @@
-# FORCE UPDATE V35 - RUN LOGS + ROLLING SAVE + ALL PREVIOUS FIXES
+# FORCE UPDATE V36 - RANK ACCURACY FIXES (answer box, domain match, no double-pay retry, check link)
 import requests
 import time
 import pandas as pd
@@ -272,21 +272,107 @@ def process_bulk_upload(uploaded_file, mode="append"):
 # Bug Fix: max_workers=5, retry sleep at top of loop
 # Now also writes human-readable logs per keyword
 # ─────────────────────────────────────────────
+# ─────────────────────────────────────────────
+# GOOGLE SEARCH SETTINGS USED FOR EVERY KEYWORD
+# These decide WHICH Google page DataForSEO looks at.
+# If you check a rank by hand, you must copy these same settings,
+# otherwise your number and the tool's number will not match.
+#   SERP_CITY = the city whose Google results we check
+#   mobile    = phone results (these are different from laptop results)
+#   depth 20  = look at the first 20 results only
+# ─────────────────────────────────────────────
+
+# 📍 CHANGE PLACE HERE
+# Write a city name exactly as it is spelled, e.g. "Chandigarh", "New Delhi", "Mumbai".
+# Write "" (empty) to go back to all of India.
+# The code finds the correct DataForSEO place code for this city by itself.
+# If the city is not found in Google's place list, it falls back to all of India
+# and writes a warning in Run Logs.
+SERP_CITY = "Chandigarh"
+
+INDIA_LOCATION_CODE = 2356          # code for "all of India"
+_resolved_location  = None          # filled once per run by resolve_serp_location()
+
+
+def resolve_serp_location():
+    """Find the DataForSEO place code for SERP_CITY. Returns {'code': int, 'label': str, 'warning': str}."""
+    global _resolved_location
+    if _resolved_location:
+        return _resolved_location
+
+    city = (SERP_CITY or "").strip()
+    if not city:
+        _resolved_location = {"code": INDIA_LOCATION_CODE, "label": "All of India", "warning": ""}
+        return _resolved_location
+
+    try:
+        auth = "Basic " + base64.b64encode(f"{API_LOGIN}:{API_PASSWORD}".encode()).decode()
+        r = requests.get("https://api.dataforseo.com/v3/serp/google/locations/in",
+                         headers={'Authorization': auth}, timeout=60)
+        places = r.json()['tasks'][0]['result'] or []
+
+        def first_part(p):
+            return str(p.get('location_name', '')).split(',')[0].strip().lower()
+
+        same_name = [p for p in places if first_part(p) == city.lower()]
+        cities    = [p for p in same_name if str(p.get('location_type', '')).lower() == 'city']
+        pick      = (cities or same_name or [None])[0]
+
+        if pick:
+            _resolved_location = {"code": int(pick['location_code']),
+                                  "label": pick['location_name'], "warning": ""}
+        else:
+            _resolved_location = {"code": INDIA_LOCATION_CODE, "label": "All of India",
+                                  "warning": f"City '{city}' was not found in Google's place list, so all of India was used instead. Check the spelling of SERP_CITY."}
+    except Exception as e:
+        # Do not save this, so the next run tries the lookup again
+        return {"code": INDIA_LOCATION_CODE, "label": "All of India",
+                "warning": f"Could not look up city '{city}' ({e}), so all of India was used for this run."}
+
+    return _resolved_location
+
+SERP_LANGUAGE_CODE = "en"
+SERP_DEVICE        = "mobile"
+SERP_OS            = "android"
+SERP_DEPTH         = 20
+
+# Google result types where an EduTap link can appear and should count as a rank.
+# "featured_snippet" = the answer box Google shows at the very top.
+# Before this fix, only "organic" was read, so an EduTap answer box was missed.
+COUNTED_TYPES = ("organic", "featured_snippet")
+
+
+def _domain_matches(item_domain, item_url, wanted_domain):
+    """True if the result belongs to wanted_domain (also matches sub-domains like blog.edutap.in).
+    Uses the 'domain' field DataForSEO sends, not a text search inside the whole link."""
+    d = (item_domain or "").lower().replace("www.", "")
+    if not d:
+        # fallback: take the domain out of the link
+        d = normalize_url(item_url).split("/")[0]
+    return d == wanted_domain or d.endswith("." + wanted_domain)
+
+
 def fetch_rank_single(item, run_id, run_type):
     keyword    = item['keyword']
     target_url = item.get('target_url', '')
     url        = "https://api.dataforseo.com/v3/serp/google/organic/live/advanced"
-    payload    = [{"keyword": keyword, "location_code": 2356, "language_code": "en",
-                   "device": "mobile", "os": "android", "depth": 20}]
+    payload    = [{"keyword": keyword,
+                   "location_code": resolve_serp_location()["code"],
+                   "language_code": SERP_LANGUAGE_CODE,
+                   "device": SERP_DEVICE, "os": SERP_OS,
+                   "depth": SERP_DEPTH}]
     auth       = "Basic " + base64.b64encode(f"{API_LOGIN}:{API_PASSWORD}".encode()).decode()
     headers    = {'Authorization': auth, 'Content-Type': 'application/json'}
 
     accumulated_cost = 0.0
-    final_res = None
+    res_data = None
 
+    # Try up to 2 times, but ONLY when the API call itself failed.
+    # Old code also asked again when EduTap was simply not in the top 20,
+    # which paid twice for every "not ranked" keyword and could swap in a different answer.
     for attempt in range(1, 3):
         if attempt == 2:
-            time.sleep(1.5)  # Sleep BEFORE retry, not after success
+            time.sleep(1.5)
 
         res_data = {
             "keyword": keyword, "exam": item['exam'], "type": item['type'],
@@ -294,46 +380,65 @@ def fetch_rank_single(item, run_id, run_type):
             "comp_ranks": {k: 101 for k in COMPETITORS.keys()},
             "comp_urls":  {k: ""  for k in COMPETITORS.keys()}
         }
+        got_valid_answer = False
 
         try:
-            response  = requests.post(url, headers=headers, json=payload, timeout=30)
+            response  = requests.post(url, headers=headers, json=payload, timeout=60)
             data      = response.json()
-            accumulated_cost += data.get('cost', 0)
+            accumulated_cost += data.get('cost', 0) or 0
 
             if response.status_code == 200:
                 try:
                     tasks = data.get('tasks', [])
                     if not tasks:
-                        msg = f"No tasks returned by DataForSEO for this keyword"
-                        _log(run_id, run_type, "warning", msg, keyword=keyword, exam=item['exam'], kw_type=item['type'])
+                        _log(run_id, run_type, "warning", "No tasks returned by DataForSEO for this keyword",
+                             keyword=keyword, exam=item['exam'], kw_type=item['type'])
                         continue
 
                     result = tasks[0].get('result')
                     if not result:
                         task_msg = tasks[0].get('status_message', 'Unknown error')
-                        msg = f"DataForSEO task failed — reason: {task_msg}"
-                        _log(run_id, run_type, "error", msg, keyword=keyword, exam=item['exam'], kw_type=item['type'])
+                        _log(run_id, run_type, "error", f"DataForSEO task failed — reason: {task_msg}",
+                             keyword=keyword, exam=item['exam'], kw_type=item['type'])
                         continue
 
-                    items_list = result[0].get('items', [])
+                    serp       = result[0]
+                    items_list = serp.get('items', []) or []
+                    check_url  = serp.get('check_url', '')
+
                     best = 101; best_url = "Not Ranked"; target_f = 101
+                    best_abs = None; best_is_snippet = False
                     clean_t = normalize_url(target_url)
                     comp_found      = {k: 101 for k in COMPETITORS.keys()}
                     comp_urls_found = {k: ""  for k in COMPETITORS.keys()}
 
                     for item_res in items_list:
-                        if item_res.get('type') == 'organic':
-                            r_url   = item_res.get('url', '')
-                            clean_r = normalize_url(r_url)
-                            grp     = item_res['rank_group']
-                            if TARGET_DOMAIN in r_url:
-                                if grp < best: best, best_url = grp, r_url
-                                if clean_t and clean_t in clean_r:
-                                    if grp < target_f: target_f = grp
-                            for c_key, c_domain in COMPETITORS.items():
-                                if c_domain in r_url and grp < comp_found[c_key]:
-                                    comp_found[c_key] = grp
-                                    comp_urls_found[c_key] = r_url
+                        i_type = item_res.get('type')
+                        if i_type not in COUNTED_TYPES:
+                            continue
+                        r_url    = item_res.get('url', '') or ''
+                        r_domain = item_res.get('domain', '') or ''
+                        clean_r  = normalize_url(r_url)
+
+                        # Rank number = position among normal (blue link) results.
+                        # The top answer box counts as position 1.
+                        if i_type == 'featured_snippet':
+                            pos = 1
+                        else:
+                            pos = item_res.get('rank_group') or 101
+
+                        if _domain_matches(r_domain, r_url, TARGET_DOMAIN):
+                            if pos < best:
+                                best, best_url = pos, r_url
+                                best_abs = item_res.get('rank_absolute')
+                                best_is_snippet = (i_type == 'featured_snippet')
+                            if clean_t and clean_t in clean_r and pos < target_f:
+                                target_f = pos
+
+                        for c_key, c_domain in COMPETITORS.items():
+                            if _domain_matches(r_domain, r_url, c_domain) and pos < comp_found[c_key]:
+                                comp_found[c_key] = pos
+                                comp_urls_found[c_key] = r_url
 
                     bucket = "B4 (>20)"
                     if best <= 3: bucket = "B1 (1-3)"
@@ -341,34 +446,40 @@ def fetch_rank_single(item, run_id, run_type):
                     elif best <= 20: bucket = "B3 (11-20)"
 
                     res_data.update({'rank': best, 'url': best_url, 'bucket': bucket,
-                                     'target_rank': target_f, 'comp_ranks': comp_found, 'comp_urls': comp_urls_found})
+                                     'target_rank': target_f, 'comp_ranks': comp_found,
+                                     'comp_urls': comp_urls_found})
+                    got_valid_answer = True
 
-                    # ── Human-readable log ────────────────────────────────────
+                    # ── Plain-English log, with a link to the exact Google page DataForSEO saw ──
+                    see_it = f" | See the exact Google page: {check_url}" if check_url else ""
                     if best <= 20:
                         url_short = best_url[:80] + "..." if len(best_url) > 80 else best_url
-                        msg = f"Ranked #{best} | Bucket: {bucket} | URL: {url_short}"
+                        extra = ""
+                        if best_is_snippet:
+                            extra = " (EduTap is in the top answer box)"
+                        elif best_abs and best_abs != best:
+                            extra = f" (#{best_abs} if you also count the boxes/videos/questions on the page)"
+                        msg = f"Ranked #{best}{extra} | Bucket: {bucket} | URL: {url_short}{see_it}"
                         _log(run_id, run_type, "success", msg, keyword=keyword,
                              exam=item['exam'], kw_type=item['type'],
                              rank=best, ranked_url=best_url)
                     else:
-                        msg = "Not in Top 20 — EduTap.in not found in first 20 Google results"
+                        msg = f"Not in Top 20 — EduTap.in not found in first 20 Google results{see_it}"
                         _log(run_id, run_type, "info", msg, keyword=keyword,
                              exam=item['exam'], kw_type=item['type'])
 
                 except Exception as parse_err:
-                    msg = f"Failed to read API response — technical error: {parse_err}"
-                    _log(run_id, run_type, "error", msg, keyword=keyword, exam=item['exam'], kw_type=item['type'])
+                    _log(run_id, run_type, "error", f"Failed to read API response — technical error: {parse_err}",
+                         keyword=keyword, exam=item['exam'], kw_type=item['type'])
 
             else:
                 err_msg = data.get('status_message', str(response.status_code))
                 if 'balance' in err_msg.lower() or response.status_code == 402:
                     msg = f"⚠️ LOW BALANCE — DataForSEO rejected this keyword. Check your DataForSEO account balance. Details: {err_msg}"
-                    level = "error"
                 else:
                     msg = f"API returned an error (HTTP {response.status_code}): {err_msg}"
-                    level = "error"
                 print(f"❌ {keyword}: {msg}")
-                _log(run_id, run_type, level, msg, keyword=keyword, exam=item['exam'], kw_type=item['type'])
+                _log(run_id, run_type, "error", msg, keyword=keyword, exam=item['exam'], kw_type=item['type'])
                 res_data['url'] = f"Err: {err_msg}"
 
         except Exception as e:
@@ -377,14 +488,12 @@ def fetch_rank_single(item, run_id, run_type):
             _log(run_id, run_type, "error", msg, keyword=keyword, exam=item['exam'], kw_type=item['type'])
             res_data['url'] = f"Err: {str(e)}"
 
-        if res_data['rank'] <= 20:
-            res_data['cost'] = accumulated_cost
-            return res_data
-        final_res = res_data
+        # Got a real answer from Google (ranked or not) -> stop, don't pay again
+        if got_valid_answer:
+            break
 
-    if final_res is None: final_res = res_data
-    final_res['cost'] = accumulated_cost
-    return final_res
+    res_data['cost'] = accumulated_cost
+    return res_data
 
 
 # ─────────────────────────────────────────────
@@ -438,8 +547,12 @@ def perform_update(keywords_list, progress_bar=None, status_text=None, run_type=
     pending_save    = []
     log_flush_count = 0
 
+    place = resolve_serp_location()
     _log(run_id, run_type, "info",
-         f"Run started — {total} keywords queued | Workers: {MAX_WORKERS} | Started at: {date_str} IST")
+         f"Run started — {total} keywords queued | Place: {place['label']} | Device: {SERP_DEVICE} | "
+         f"Workers: {MAX_WORKERS} | Started at: {date_str} IST")
+    if place.get("warning"):
+        _log(run_id, run_type, "warning", "📍 " + place["warning"])
 
     def flush_rankings(rows):
         if not rows or not supabase: return
