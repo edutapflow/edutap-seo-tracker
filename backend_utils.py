@@ -1,5 +1,6 @@
-# FORCE UPDATE V36 - RANK ACCURACY FIXES (answer box, domain match, no double-pay retry, check link)
+# FORCE UPDATE V37 - not-found check added | RANK ACCURACY FIXES (answer box, domain match, no double-pay retry, check link)
 import requests
+import json
 import time
 import pandas as pd
 import base64
@@ -464,7 +465,20 @@ def fetch_rank_single(item, run_id, run_type):
                              exam=item['exam'], kw_type=item['type'],
                              rank=best, ranked_url=best_url)
                     else:
-                        msg = f"Not in Top 20 — EduTap.in not found in first 20 Google results{see_it}"
+                        # ── Free check: what did the Google page actually contain? ──
+                        # Tells us if EduTap was really missing, or was on the page
+                        # inside a result type the code does not count.
+                        organic = [i for i in items_list if i.get('type') == 'organic']
+                        last_pos = max([(i.get('rank_group') or 0) for i in organic] or [0])
+                        found_in = sorted({str(i.get('type')) for i in items_list
+                                           if 'edutap.in' in json.dumps(i).lower()})
+                        page_info = f" | Google page had {len(organic)} normal results (up to #{last_pos})"
+                        if found_in:
+                            page_info += (f" | CHECK: EduTap WAS on the page, inside: {', '.join(found_in)}"
+                                          f" (this type is not counted as a rank)")
+                        else:
+                            page_info += " | EduTap was not anywhere on this page"
+                        msg = f"Not in Top 20 — EduTap.in not found in first 20 Google results{page_info}{see_it}"
                         _log(run_id, run_type, "info", msg, keyword=keyword,
                              exam=item['exam'], kw_type=item['type'])
 
