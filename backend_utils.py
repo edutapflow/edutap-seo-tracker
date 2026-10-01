@@ -289,7 +289,7 @@ def process_bulk_upload(uploaded_file, mode="append"):
 # The code finds the correct DataForSEO place code for this city by itself.
 # If the city is not found in Google's place list, it falls back to all of India
 # and writes a warning in Run Logs.
-SERP_CITY = "Panchkula"
+SERP_CITY = ""
 
 INDIA_LOCATION_CODE = 2356          # code for "all of India"
 _resolved_location  = None          # filled once per run by resolve_serp_location()
