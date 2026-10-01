@@ -1,4 +1,4 @@
-# FORCE UPDATE V37 - not-found check added | RANK ACCURACY FIXES (answer box, domain match, no double-pay retry, check link)
+# FORCE UPDATE V38 - second look when not found | RANK ACCURACY FIXES (answer box, domain match, no double-pay retry, check link)
 import requests
 import json
 import time
@@ -368,12 +368,16 @@ def fetch_rank_single(item, run_id, run_type):
     accumulated_cost = 0.0
     res_data = None
 
-    # Try up to 2 times, but ONLY when the API call itself failed.
-    # Old code also asked again when EduTap was simply not in the top 20,
-    # which paid twice for every "not ranked" keyword and could swap in a different answer.
-    for attempt in range(1, 3):
-        if attempt == 2:
+    # Google does not always show the same page. For the same keyword, a few minutes apart,
+    # EduTap can be at #4 on one look and missing on the next look.
+    # So: if EduTap is NOT found on the first look, we look ONE more time and keep the better answer.
+    # (Up to 3 calls in total only if DataForSEO itself gives an error.)
+    first_answer = None
+    for attempt in range(1, 4):
+        if attempt > 1:
             time.sleep(1.5)
+        is_second_check = first_answer is not None
+        label = "2nd check: " if is_second_check else ""
 
         res_data = {
             "keyword": keyword, "exam": item['exam'], "type": item['type'],
@@ -460,7 +464,7 @@ def fetch_rank_single(item, run_id, run_type):
                             extra = " (EduTap is in the top answer box)"
                         elif best_abs and best_abs != best:
                             extra = f" (#{best_abs} if you also count the boxes/videos/questions on the page)"
-                        msg = f"Ranked #{best}{extra} | Bucket: {bucket} | URL: {url_short}{see_it}"
+                        msg = f"{label}Ranked #{best}{extra} | Bucket: {bucket} | URL: {url_short}{see_it}"
                         _log(run_id, run_type, "success", msg, keyword=keyword,
                              exam=item['exam'], kw_type=item['type'],
                              rank=best, ranked_url=best_url)
@@ -473,12 +477,15 @@ def fetch_rank_single(item, run_id, run_type):
                         found_in = sorted({str(i.get('type')) for i in items_list
                                            if 'edutap.in' in json.dumps(i).lower()})
                         page_info = f" | Google page had {len(organic)} normal results (up to #{last_pos})"
-                        if found_in:
-                            page_info += (f" | CHECK: EduTap WAS on the page, inside: {', '.join(found_in)}"
-                                          f" (this type is not counted as a rank)")
+                        if 'ai_overview' in found_in:
+                            page_info += " | EduTap is only inside Google's AI Overview box, not as a normal link"
+                        elif found_in:
+                            page_info += (f" | EduTap was on the page only inside: {', '.join(found_in)}"
+                                          f" (not counted as a rank)")
                         else:
                             page_info += " | EduTap was not anywhere on this page"
-                        msg = f"Not in Top 20 — EduTap.in not found in first 20 Google results{page_info}{see_it}"
+                        again = "" if is_second_check else " | Checking Google once more..."
+                        msg = f"{label}Not in Top 20 — EduTap.in not found in first 20 Google results{page_info}{again}{see_it}"
                         _log(run_id, run_type, "info", msg, keyword=keyword,
                              exam=item['exam'], kw_type=item['type'])
 
@@ -502,9 +509,16 @@ def fetch_rank_single(item, run_id, run_type):
             _log(run_id, run_type, "error", msg, keyword=keyword, exam=item['exam'], kw_type=item['type'])
             res_data['url'] = f"Err: {str(e)}"
 
-        # Got a real answer from Google (ranked or not) -> stop, don't pay again
         if got_valid_answer:
-            break
+            # Found EduTap, or this was already the 2nd look -> stop
+            if res_data['rank'] <= 20 or is_second_check:
+                break
+            # Not found on the 1st look -> remember it and look once more
+            first_answer = res_data
+
+    # Keep the better of the two looks
+    if first_answer is not None and res_data['rank'] >= first_answer['rank']:
+        res_data = first_answer
 
     res_data['cost'] = accumulated_cost
     return res_data
