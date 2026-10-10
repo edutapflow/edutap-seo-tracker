@@ -8,8 +8,26 @@ on:
   # 9:00 AM IST every Monday. Removing the GitHub schedule
   # prevents double-runs (GitHub scheduler + cron-job.org).
   # To trigger manually: GitHub Actions tab → Run workflow
+  #   run_mode = auto → follow the exam schedule (weekly / 15 days / monthly)
+  #   run_mode = all  → run every exam now
+  #   run_mode = exams → run only the exams in "exams" (the website uses this)
   # -------------------------------------------------------
   workflow_dispatch:
+    inputs:
+      run_mode:
+        description: "auto = follow exam schedule, all = run every exam now"
+        required: false
+        default: "auto"
+        type: choice
+        options:
+          - auto
+          - all
+          - exams
+      exams:
+        description: "Only for run_mode = exams: exam names, comma separated"
+        required: false
+        default: ""
+        type: string
 
 jobs:
   build:
@@ -29,10 +47,12 @@ jobs:
 
       - name: Run Update Script
         env:
-          API_LOGIN: ${{ secrets.API_LOGIN }}
-          API_PASSWORD: ${{ secrets.API_PASSWORD }}
+          SEARCHAPI_KEY: ${{ secrets.SEARCHAPI_KEY }}
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
           EMAIL_SENDER: ${{ secrets.EMAIL_SENDER }}
           EMAIL_PASSWORD: ${{ secrets.EMAIL_PASSWORD }}
+          EMAIL_RECEIVER: ${{ secrets.EMAIL_RECEIVER }}
+          RUN_MODE: ${{ github.event.inputs.run_mode || 'auto' }}
+          RUN_EXAMS: ${{ github.event.inputs.exams || '' }}
         run: python cron_job.py
