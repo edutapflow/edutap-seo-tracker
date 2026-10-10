@@ -1,0 +1,156 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>EduTap Rank Board</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Schibsted+Grotesk:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="style.css">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%2310233f'/%3E%3Crect x='7' y='8' width='18' height='4' rx='2' fill='%2386b6ef'/%3E%3Crect x='7' y='14' width='13' height='4' rx='2' fill='%232a78d6'/%3E%3Crect x='7' y='20' width='8' height='4' rx='2' fill='%23fff'/%3E%3C/svg%3E">
+</head>
+<body>
+
+<!-- LOGIN -->
+<section id="login" class="login" hidden>
+  <form id="loginForm" class="login-card">
+    <div class="brand brand-lg"><span class="brand-mark" aria-hidden="true"></span>EduTap Rank Board</div>
+    <p class="muted">Where EduTap shows on Google for our exam keywords.</p>
+    <label for="pw">Team password</label>
+    <input id="pw" type="password" autocomplete="current-password" required>
+    <button class="btn btn-primary" type="submit">Log in</button>
+    <p id="loginErr" class="err" role="alert"></p>
+  </form>
+</section>
+
+<!-- APP -->
+<div id="app" hidden>
+  <header class="top">
+    <div class="top-left">
+      <div class="brand"><span class="brand-mark" aria-hidden="true"></span>EduTap Rank Board</div>
+      <div id="lastRun" class="muted small"></div>
+    </div>
+    <div class="credits" id="credits" aria-live="polite">
+      <div class="credits-text"><b id="credLeft">…</b> <span id="credOf" class="muted"></span></div>
+      <div class="meter" aria-hidden="true"><span id="credBar"></span></div>
+      <div id="credNote" class="muted small"></div>
+    </div>
+    <div class="top-actions">
+      <button id="runBtn" class="btn btn-primary">Run update</button>
+      <button id="reloadBtn" class="btn btn-ghost" title="Load the newest data">Reload</button>
+      <button id="logoutBtn" class="btn btn-ghost">Log out</button>
+    </div>
+  </header>
+
+  <nav class="tabs" role="tablist">
+    <button role="tab" class="tab" data-tab="overview" aria-selected="true">Overview</button>
+    <button role="tab" class="tab" data-tab="movers" aria-selected="false">Movers and trends</button>
+  </nav>
+
+  <section class="filters" aria-label="Filters">
+    <label>Exam
+      <select id="fExam"><option value="">All exams</option></select>
+    </label>
+    <label>Schedule
+      <select id="fGroup">
+        <option value="">All</option>
+        <option>Every week</option>
+        <option>Every 15 days</option>
+        <option>Once a month</option>
+      </select>
+    </label>
+    <label>Type
+      <select id="fType"><option value="">All</option></select>
+    </label>
+    <label>Cluster
+      <select id="fCluster"><option value="">All clusters</option></select>
+    </label>
+    <label class="grow">Keyword
+      <input id="fSearch" type="search" placeholder="Search keywords">
+    </label>
+    <button id="fClear" class="btn btn-ghost btn-sm" type="button">Clear filters</button>
+  </section>
+
+  <main>
+    <!-- OVERVIEW -->
+    <section id="tab-overview" class="tabpanel">
+      <div class="strip" id="strip"></div>
+
+      <div class="panel">
+        <div class="panel-head">
+          <div>
+            <h2>Where each exam ranks</h2>
+            <p class="muted small">Every bar is one exam's keywords, split by their latest Google position. Click an exam to filter.</p>
+          </div>
+          <div class="legend" id="legend"></div>
+        </div>
+        <div class="ladder" id="ladder" role="table" aria-label="Keywords by position for each exam"></div>
+      </div>
+    </section>
+
+    <!-- MOVERS -->
+    <section id="tab-movers" class="tabpanel" hidden>
+      <div class="seg" role="tablist" id="moverSeg">
+        <button data-m="gains" aria-pressed="true">Biggest gains</button>
+        <button data-m="drops" aria-pressed="false">Biggest drops</button>
+        <button data-m="in10" aria-pressed="false">Entered top 10</button>
+        <button data-m="out10" aria-pressed="false">Left top 10</button>
+        <button data-m="nc" aria-pressed="false">Not confirmed</button>
+        <button data-m="all" aria-pressed="false">All keywords</button>
+      </div>
+      <div class="movers-grid">
+        <div class="panel">
+          <div class="panel-head">
+            <div>
+              <h2 id="moverTitle">Biggest gains</h2>
+              <p class="muted small" id="moverHint"></p>
+            </div>
+            <button id="csvBtn" class="btn btn-ghost btn-sm">Download list</button>
+          </div>
+          <div class="table-wrap">
+            <table class="tbl" id="moverTable">
+              <thead><tr>
+                <th>Keyword</th><th>Exam</th><th class="num">Before</th><th class="num">Now</th><th class="num">Change</th><th>Checked</th>
+              </tr></thead>
+              <tbody></tbody>
+            </table>
+          </div>
+          <p id="moverEmpty" class="empty" hidden></p>
+        </div>
+
+        <aside class="panel trend" id="trendPanel">
+          <h2 id="trendTitle">Rank over time</h2>
+          <p class="muted small" id="trendSub">Click a keyword in the list to see its rank history.</p>
+          <div id="trendChart" class="chart"></div>
+          <dl class="trend-facts" id="trendFacts"></dl>
+        </aside>
+      </div>
+    </section>
+  </main>
+</div>
+
+<!-- RUN DIALOG -->
+<dialog id="runDlg" class="dlg">
+  <form method="dialog" id="runForm">
+    <h2>Run an update now</h2>
+    <p class="muted small">The robot checks the chosen exams on Google and emails the sheet when it is done. Each keyword uses about 1.4 searches.</p>
+    <div id="runExams" class="run-exams"></div>
+    <p id="runEstimate" class="small"></p>
+    <label for="runPw">Run password</label>
+    <input id="runPw" type="password" autocomplete="off">
+    <p id="runMsg" class="small" role="status"></p>
+    <div class="dlg-actions">
+      <button type="button" class="btn btn-ghost" id="runCancel">Close</button>
+      <button type="submit" class="btn btn-primary" id="runGo" value="go">Start run</button>
+    </div>
+    <h3>Recent runs</h3>
+    <ul id="runList" class="run-list"><li class="muted small">Loading…</li></ul>
+  </form>
+</dialog>
+
+<div id="tip" class="tip" role="tooltip" hidden></div>
+
+<script src="app.js"></script>
+</body>
+</html>

@@ -1,0 +1,6 @@
+{
+  "note": "Exam schedule used by the robot (cron_job.py) AND the website. Names must match the exam column in keywords_master. Any exam not listed here runs every 15 days.",
+  "every_week": ["RBI Grade B", "EPFO", "SEBI Grade A", "NABARD Grade A", "JAIIB", "CAIIB", "IFSCA Grade A", "IRDAI Grade A"],
+  "once_a_month": ["FCI AG3", "LEO", "IB ACIO", "ALC", "ESIC DD", "UPSC CSAT"],
+  "fortnight_start": "2026-10-12"
+}

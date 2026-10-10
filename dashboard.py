@@ -1,4 +1,4 @@
-# FORCE UPDATE V35 - RUN LOGS TAB + ALL PREVIOUS FIXES
+# FORCE UPDATE V36 - SearchApi + per-keyword last 4 runs (exams now run on different weeks)
 import streamlit as st
 import pandas as pd
 from datetime import datetime, timedelta
@@ -7,7 +7,7 @@ from backend_utils import (
     perform_update, get_all_keywords, add_keyword, delete_bulk_keywords,
     process_bulk_upload, normalize_url, get_current_month_cost,
     get_live_usd_inr_rate, clear_master_database, supabase,
-    fetch_all_rows, send_email_alert, build_prev_map_safe, get_dataforseo_balance,
+    fetch_all_rows, send_email_alert, build_prev_map_safe, get_searchapi_credits,
     fetch_run_ids, fetch_logs_for_run
 )
 
@@ -54,7 +54,10 @@ def get_master_data():  return fetch_all_rows("keywords_master")
 
 @st.cache_data(show_spinner=False)
 def get_dashboard_view(master_df, history_df):
-    date_labels = ["Current", "Prev", "-2", "-3"]
+    # Exams now run on different weeks (weekly / every 15 days / monthly),
+    # so each keyword shows ITS OWN last 4 runs, not the same 4 dates for all.
+    # The "Last Updated" column shows when that keyword was last checked.
+    date_labels = ["Latest", "Previous", "Before -2", "Before -3"]
     if master_df.empty: return pd.DataFrame(), {}, date_labels
 
     past_data = []; prev_rank_map = {}
@@ -62,32 +65,24 @@ def get_dashboard_view(master_df, history_df):
     if not history_df.empty:
         history_df = history_df.copy()
         history_df['date_dt'] = pd.to_datetime(history_df['date'])
-        history_df['day']     = history_df['date_dt'].dt.strftime('%b %d')
-        unique_days   = history_df.sort_values('date_dt', ascending=False)['day'].unique()[:4]
-        date_labels   = list(unique_days)
-        while len(date_labels) < 4: date_labels.append("N/A")
+        history_df['day']     = history_df['date_dt'].dt.strftime('%Y-%m-%d')
 
         for kw, grp in history_df.groupby('keyword'):
             grp     = grp.sort_values('date_dt')
             kw_data = {'keyword': kw, 'URL-0': "", 'bucket': 'Pending', 'Date-0': "-"}
             for i in range(4): kw_data[f'R-{i}'] = 101; kw_data[f'T-{i}'] = 101
 
-            unique_days_for_kw = grp['day'].unique()
-            if len(unique_days_for_kw) >= 2:
-                second_day = sorted(unique_days_for_kw, reverse=True)[1]
-                prev_rank_map[kw] = int(grp[grp['day'] == second_day].iloc[-1]['rank'])
-            else:
-                prev_rank_map[kw] = 101
-
             latest_per_day = grp.groupby('day').last()
-            for i, day in enumerate(date_labels):
-                if day != "N/A" and day in latest_per_day.index:
-                    kw_data[f'R-{i}'] = latest_per_day.loc[day, 'rank']
-                    kw_data[f'T-{i}'] = latest_per_day.loc[day, 'target_rank']
-                    if i == 0:
-                        kw_data['URL-0']  = latest_per_day.loc[day, 'url']
-                        kw_data['bucket'] = latest_per_day.loc[day, 'bucket']
-                        kw_data['Date-0'] = latest_per_day.loc[day, 'date']
+            kw_days = sorted(latest_per_day.index, reverse=True)[:4]
+            prev_rank_map[kw] = int(latest_per_day.loc[kw_days[1], 'rank']) if len(kw_days) >= 2 else 101
+
+            for i, day in enumerate(kw_days):
+                kw_data[f'R-{i}'] = latest_per_day.loc[day, 'rank']
+                kw_data[f'T-{i}'] = latest_per_day.loc[day, 'target_rank']
+                if i == 0:
+                    kw_data['URL-0']  = latest_per_day.loc[day, 'url']
+                    kw_data['bucket'] = latest_per_day.loc[day, 'bucket']
+                    kw_data['Date-0'] = latest_per_day.loc[day, 'date']
             past_data.append(kw_data)
 
         past_df = pd.DataFrame(past_data) if past_data else pd.DataFrame(columns=['keyword', 'bucket'])
@@ -113,7 +108,10 @@ def get_dashboard_view(master_df, history_df):
         elif prev <= 3 and curr > 3:            alert_status = "🟡 Out of Top 3"
         elif prev > 3 and curr <= 3:            alert_status = "🟢 Entered Top 3"
 
-        if not t_url or t_url.lower() in ["nan", "none", ""]:
+        not_confirmed = r_url.startswith("Not confirmed")
+        if not_confirmed:
+            status = "❔ Not confirmed"; display_t_url = t_url if t_url and t_url.lower() not in ["nan", "none"] else None
+        elif not t_url or t_url.lower() in ["nan", "none", ""]:
             status = "⚠️ Target Not Set"; display_t_url = None
         else:
             display_t_url = t_url
@@ -121,7 +119,7 @@ def get_dashboard_view(master_df, history_df):
             elif clean_t and clean_t == clean_r: status = "✅ Matched"
             else:                              status = "⚠️ Mismatch"
 
-        if not r_url or "Err" in r_url: r_url = None
+        if not r_url or "Err" in r_url or not_confirmed: r_url = None
         raw_date = str(row.get('Date-0', '-'))
         last_upd = raw_date[:16] if raw_date != '-' else '-'
         bucket   = row.get('bucket', 'Pending') if pd.notna(row.get('bucket')) else 'Pending'
@@ -216,13 +214,13 @@ with tab1:
                 elif prev_rank <= 3 and curr_rank > 3:          alerts["yellow"].append(alert_obj)
                 elif prev_rank > 3 and curr_rank <= 3:          alerts["green"].append(alert_obj)
 
-            dfs_balance = get_dataforseo_balance()
+            credits = get_searchapi_credits()
             send_email_alert(
                 alerts,
                 subject_prefix="🛠️ Manual Run",
                 all_checked_data=all_checked_data,
                 run_cost=r_cost,
-                dataforseo_balance=dfs_balance
+                credits_left=credits
             )
             st.session_state['last_run_date'] = r_date; st.session_state['last_run_cost'] = r_cost
             st.session_state['is_running']    = False;  st.session_state['show_run_dialog'] = False
@@ -289,7 +287,7 @@ with tab1:
             m3.metric("Base Context", base_count, help=f"Count of {base_lbl}")
 
         st.markdown("---")
-        est_cost_usd = len(df) * 0.0035
+        est_cost_usd = len(df) * 0.0056   # SearchApi: about 1.4 searches per keyword x $0.004
         est_cost_inr = est_cost_usd * USD_TO_INR
         budget_ok  = (spent_inr + est_cost_inr) <= LIMIT_INR if LOCK_ACTIVE else True
         exam_ok    = (not too_many_exams) and (not no_exam_selected)
@@ -322,7 +320,7 @@ with tab1:
             if not budget_ok:    st.error("⛔ Insufficient Budget")
             elif too_many_exams: st.error(f"⛔ Max {MAX_EXAMS_FOR_MANUAL_RUN} exams allowed. Use GitHub Actions for full bulk.")
             elif no_exam_selected: st.caption("👆 Select an exam first to enable the run button.")
-            else: st.caption(f"Estimated cost: ${est_cost_usd:.4f} (≈ ₹{est_cost_inr:.0f}) | Email will be sent after completion.")
+            else: st.caption(f"Uses about {int(len(df)*1.4)} SearchApi searches (≈ ${est_cost_usd:.2f}) | Email will be sent after completion.")
 
         def highlight_alert(row):
             s = row['Alert']
@@ -552,7 +550,7 @@ with tab5:
 # ─────────────────────────────────────────────
 with tab6:
     st.title("📋 Run Logs")
-    st.caption("Every keyword result and error from each DataForSEO run — in plain English.")
+    st.caption("Every keyword result and error from each SearchApi run — in plain English.")
 
     # ── Separate password lock for this tab ──────────────────────────────
     # NOTE: We use if/else NOT st.stop() here.

@@ -1,9 +1,8 @@
-# FORCE UPDATE V38 - second look when not found | RANK ACCURACY FIXES (answer box, domain match, no double-pay retry, check link)
+# FORCE UPDATE V39 - SearchApi (up to 3 looks, Not confirmed), exam schedule support, searches-left in email
 import requests
 import json
 import time
 import pandas as pd
-import base64
 import smtplib
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
@@ -16,7 +15,7 @@ from itertools import groupby
 from openpyxl import Workbook
 from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 from openpyxl.utils import get_column_letter
-from config import API_LOGIN, API_PASSWORD, SUPABASE_URL, SUPABASE_KEY, EMAIL_SENDER, EMAIL_PASSWORD, EMAIL_RECEIVER
+from config import SEARCHAPI_KEY, SUPABASE_URL, SUPABASE_KEY, EMAIL_SENDER, EMAIL_PASSWORD, EMAIL_RECEIVER
 
 # --- CONNECT TO CLOUD ---
 supabase = None
@@ -90,20 +89,6 @@ def get_live_usd_inr_rate():
     except: pass
     return 90.0
 
-def get_dataforseo_balance():
-    """Fetch current DataForSEO account balance in USD."""
-    try:
-        url  = "https://api.dataforseo.com/v3/appendix/user_data"
-        auth = "Basic " + base64.b64encode(f"{API_LOGIN}:{API_PASSWORD}".encode()).decode()
-        headers = {'Authorization': auth, 'Content-Type': 'application/json'}
-        response = requests.get(url, headers=headers, timeout=10)
-        if response.status_code == 200:
-            data = response.json()
-            balance = data['tasks'][0]['result'][0]['money']['balance']
-            return float(balance)
-    except Exception as e:
-        print(f"⚠️ Could not fetch DataForSEO balance: {e}")
-    return None
 
 def get_all_keywords(): return fetch_all_rows("keywords_master")
 
@@ -269,258 +254,257 @@ def process_bulk_upload(uploaded_file, mode="append"):
 
 
 # ─────────────────────────────────────────────
-# SINGLE KEYWORD FETCHER
-# Bug Fix: max_workers=5, retry sleep at top of loop
-# Now also writes human-readable logs per keyword
+# GOOGLE SEARCH SETTINGS USED FOR EVERY KEYWORD  (SearchApi)
+# These decide WHICH Google page SearchApi looks at.
+# If you check a rank by hand on a phone, these are the settings the tool copies.
+#   SEARCH_LOCATION = place on Google ("India" = all of India)
+#   SEARCH_DEVICE   = mobile results (different from laptop results)
+#   SEARCH_DEPTH    = look at the first 20 normal results only
 # ─────────────────────────────────────────────
-# ─────────────────────────────────────────────
-# GOOGLE SEARCH SETTINGS USED FOR EVERY KEYWORD
-# These decide WHICH Google page DataForSEO looks at.
-# If you check a rank by hand, you must copy these same settings,
-# otherwise your number and the tool's number will not match.
-#   SERP_CITY = the city whose Google results we check
-#   mobile    = phone results (these are different from laptop results)
-#   depth 20  = look at the first 20 results only
-# ─────────────────────────────────────────────
+SEARCHAPI_URL      = "https://www.searchapi.io/api/v1/search"
+SEARCH_LOCATION    = "India"
+SEARCH_COUNTRY     = "in"
+SEARCH_LANGUAGE    = "en"
+SEARCH_DEVICE      = "mobile"
+SEARCH_DEPTH       = 20
 
-# 📍 CHANGE PLACE HERE
-# Write a city name exactly as it is spelled, e.g. "Chandigarh", "New Delhi", "Mumbai".
-# Write "" (empty) to go back to all of India.
-# The code finds the correct DataForSEO place code for this city by itself.
-# If the city is not found in Google's place list, it falls back to all of India
-# and writes a warning in Run Logs.
-SERP_CITY = ""
+# How many times we look at Google when EduTap is NOT found.
+# Google does not always show the same page, so a "not found" is often random.
+MAX_LOOKS          = 3
+WAIT_BETWEEN_LOOKS = 2      # seconds
+# If EduTap is found only on look 2 or 3, and that number is much worse than
+# the last rank, we look one more time and keep the better number.
+JUMP_LIMIT         = 5      # places
+COST_PER_SEARCH    = 0.004  # $40 plan / 10,000 searches (used only for the cost estimate)
 
-INDIA_LOCATION_CODE = 2356          # code for "all of India"
-_resolved_location  = None          # filled once per run by resolve_serp_location()
+# Label saved in the "url" column when EduTap was not seen in any look
+# but had a Top-20 rank last time. The last rank is kept, so no false drop alert.
+NOT_CONFIRMED_LABEL = "Not confirmed (EduTap not seen in 3 looks, last rank kept)"
 
-
-def resolve_serp_location():
-    """Find the DataForSEO place code for SERP_CITY. Returns {'code': int, 'label': str, 'warning': str}."""
-    global _resolved_location
-    if _resolved_location:
-        return _resolved_location
-
-    city = (SERP_CITY or "").strip()
-    if not city:
-        _resolved_location = {"code": INDIA_LOCATION_CODE, "label": "All of India", "warning": ""}
-        return _resolved_location
-
-    try:
-        auth = "Basic " + base64.b64encode(f"{API_LOGIN}:{API_PASSWORD}".encode()).decode()
-        r = requests.get("https://api.dataforseo.com/v3/serp/google/locations/in",
-                         headers={'Authorization': auth}, timeout=60)
-        places = r.json()['tasks'][0]['result'] or []
-
-        def first_part(p):
-            return str(p.get('location_name', '')).split(',')[0].strip().lower()
-
-        same_name = [p for p in places if first_part(p) == city.lower()]
-        cities    = [p for p in same_name if str(p.get('location_type', '')).lower() == 'city']
-        pick      = (cities or same_name or [None])[0]
-
-        if pick:
-            _resolved_location = {"code": int(pick['location_code']),
-                                  "label": pick['location_name'], "warning": ""}
-        else:
-            _resolved_location = {"code": INDIA_LOCATION_CODE, "label": "All of India",
-                                  "warning": f"City '{city}' was not found in Google's place list, so all of India was used instead. Check the spelling of SERP_CITY."}
-    except Exception as e:
-        # Do not save this, so the next run tries the lookup again
-        return {"code": INDIA_LOCATION_CODE, "label": "All of India",
-                "warning": f"Could not look up city '{city}' ({e}), so all of India was used for this run."}
-
-    return _resolved_location
-
-SERP_LANGUAGE_CODE = "en"
-SERP_DEVICE        = "mobile"
-SERP_OS            = "android"
-SERP_DEPTH         = 20
-
-# Google result types where an EduTap link can appear and should count as a rank.
-# "featured_snippet" = the answer box Google shows at the very top.
-# Before this fix, only "organic" was read, so an EduTap answer box was missed.
-COUNTED_TYPES = ("organic", "featured_snippet")
+# If the API key is wrong or the monthly searches are finished, we stop the run
+# instead of wasting calls. Filled automatically during a run.
+_stop_reason = None
+LAST_RUN_SEARCHES = 0   # searches used by the last perform_update() (read by cron_job.py)
 
 
 def _domain_matches(item_domain, item_url, wanted_domain):
-    """True if the result belongs to wanted_domain (also matches sub-domains like blog.edutap.in).
-    Uses the 'domain' field DataForSEO sends, not a text search inside the whole link."""
-    d = (item_domain or "").lower().replace("www.", "")
+    """True if the result belongs to wanted_domain (also matches sub-domains like blog.edutap.in)."""
+    d = (item_domain or "").lower().replace("www.", "").split(":")[0]
     if not d:
         # fallback: take the domain out of the link
         d = normalize_url(item_url).split("/")[0]
     return d == wanted_domain or d.endswith("." + wanted_domain)
 
 
-def fetch_rank_single(item, run_id, run_type):
-    keyword    = item['keyword']
-    target_url = item.get('target_url', '')
-    url        = "https://api.dataforseo.com/v3/serp/google/organic/live/advanced"
-    payload    = [{"keyword": keyword,
-                   "location_code": resolve_serp_location()["code"],
-                   "language_code": SERP_LANGUAGE_CODE,
-                   "device": SERP_DEVICE, "os": SERP_OS,
-                   "depth": SERP_DEPTH}]
-    auth       = "Basic " + base64.b64encode(f"{API_LOGIN}:{API_PASSWORD}".encode()).decode()
-    headers    = {'Authorization': auth, 'Content-Type': 'application/json'}
+def _is_not_confirmed(url):
+    return str(url or "").startswith("Not confirmed")
 
-    accumulated_cost = 0.0
-    res_data = None
 
-    # Google does not always show the same page. For the same keyword, a few minutes apart,
-    # EduTap can be at #4 on one look and missing on the next look.
-    # So: if EduTap is NOT found on the first look, we look ONE more time and keep the better answer.
-    # (Up to 3 calls in total only if DataForSEO itself gives an error.)
-    first_answer = None
+def _searchapi_call(keyword):
+    """ONE look at Google through SearchApi.
+    Returns (data_dict_or_None, error_text_or_None, searches_used).
+    Network errors and 'too many requests' are tried again here (up to 3 times)
+    and are NOT counted as a look."""
+    global _stop_reason
+    params = {
+        "engine": "google_rank_tracking",
+        "q": keyword,
+        "device": SEARCH_DEVICE,
+        "gl": SEARCH_COUNTRY,
+        "hl": SEARCH_LANGUAGE,
+        "num": SEARCH_DEPTH,
+        "api_key": SEARCHAPI_KEY,
+    }
+    if SEARCH_LOCATION:
+        params["location"] = SEARCH_LOCATION
+
+    last_err = "Unknown error"
     for attempt in range(1, 4):
-        if attempt > 1:
-            time.sleep(1.5)
-        is_second_check = first_answer is not None
-        label = "2nd check: " if is_second_check else ""
-
-        res_data = {
-            "keyword": keyword, "exam": item['exam'], "type": item['type'],
-            "rank": 101, "url": "No Data", "bucket": "B4 (>20)", "target_rank": 101, "cost": 0,
-            "comp_ranks": {k: 101 for k in COMPETITORS.keys()},
-            "comp_urls":  {k: ""  for k in COMPETITORS.keys()}
-        }
-        got_valid_answer = False
+        if _stop_reason:
+            return None, _stop_reason, 0
+        try:
+            r = requests.get(SEARCHAPI_URL, params=params, timeout=90)
+        except Exception as e:
+            last_err = f"Network error — could not reach SearchApi: {e}"
+            time.sleep(3 * attempt)
+            continue
 
         try:
-            response  = requests.post(url, headers=headers, json=payload, timeout=60)
-            data      = response.json()
-            accumulated_cost += data.get('cost', 0) or 0
+            data = r.json()
+        except ValueError:
+            data = {"error": f"Bad reply from SearchApi (HTTP {r.status_code})"}
 
-            if response.status_code == 200:
-                try:
-                    tasks = data.get('tasks', [])
-                    if not tasks:
-                        _log(run_id, run_type, "warning", "No tasks returned by DataForSEO for this keyword",
-                             keyword=keyword, exam=item['exam'], kw_type=item['type'])
-                        continue
+        err = data.get("error") if isinstance(data, dict) else "Unexpected reply"
+        if r.status_code == 200 and not err:
+            return data, None, 1
 
-                    result = tasks[0].get('result')
-                    if not result:
-                        task_msg = tasks[0].get('status_message', 'Unknown error')
-                        _log(run_id, run_type, "error", f"DataForSEO task failed — reason: {task_msg}",
-                             keyword=keyword, exam=item['exam'], kw_type=item['type'])
-                        continue
+        err_text = str(err or f"HTTP {r.status_code}")
+        low = err_text.lower()
 
-                    serp       = result[0]
-                    items_list = serp.get('items', []) or []
-                    check_url  = serp.get('check_url', '')
+        # Wrong key, or monthly searches finished -> stop the whole run
+        if r.status_code in (401, 402, 403) or "api key" in low or "api_key" in low \
+                or "credit" in low or "out of searches" in low or "upgrade" in low:
+            _stop_reason = f"SearchApi stopped the run: {err_text}"
+            return None, _stop_reason, 0
 
-                    best = 101; best_url = "Not Ranked"; target_f = 101
-                    best_abs = None; best_is_snippet = False
-                    clean_t = normalize_url(target_url)
-                    comp_found      = {k: 101 for k in COMPETITORS.keys()}
-                    comp_urls_found = {k: ""  for k in COMPETITORS.keys()}
+        # The place name was not accepted -> try once with country only
+        if "location" in low and "location" in params:
+            params.pop("location")
+            continue
 
-                    for item_res in items_list:
-                        i_type = item_res.get('type')
-                        if i_type not in COUNTED_TYPES:
-                            continue
-                        r_url    = item_res.get('url', '') or ''
-                        r_domain = item_res.get('domain', '') or ''
-                        clean_r  = normalize_url(r_url)
+        # Too many requests / server busy -> wait and try again
+        if r.status_code == 429 or r.status_code >= 500:
+            last_err = f"SearchApi busy (HTTP {r.status_code}): {err_text}"
+            time.sleep(5 * attempt)
+            continue
 
-                        # Rank number = position among normal (blue link) results.
-                        # The top answer box counts as position 1.
-                        if i_type == 'featured_snippet':
-                            pos = 1
-                        else:
-                            pos = item_res.get('rank_group') or 101
+        return None, f"SearchApi error (HTTP {r.status_code}): {err_text}", 0
 
-                        if _domain_matches(r_domain, r_url, TARGET_DOMAIN):
-                            if pos < best:
-                                best, best_url = pos, r_url
-                                best_abs = item_res.get('rank_absolute')
-                                best_is_snippet = (i_type == 'featured_snippet')
-                            if clean_t and clean_t in clean_r and pos < target_f:
-                                target_f = pos
+    return None, last_err, 0
 
-                        for c_key, c_domain in COMPETITORS.items():
-                            if _domain_matches(r_domain, r_url, c_domain) and pos < comp_found[c_key]:
-                                comp_found[c_key] = pos
-                                comp_urls_found[c_key] = r_url
 
-                    bucket = "B4 (>20)"
-                    if best <= 3: bucket = "B1 (1-3)"
-                    elif best <= 10: bucket = "B2 (4-10)"
-                    elif best <= 20: bucket = "B3 (11-20)"
+def _read_page(data, target_url):
+    """Read one SearchApi Google page. Returns rank info for EduTap and competitors."""
+    organic = (data or {}).get("organic_results") or []
+    best = 101; best_url = "Not Ranked"; target_f = 101
+    clean_t = normalize_url(target_url)
+    comp_found = {k: 101 for k in COMPETITORS.keys()}
+    comp_urls  = {k: ""  for k in COMPETITORS.keys()}
 
-                    res_data.update({'rank': best, 'url': best_url, 'bucket': bucket,
-                                     'target_rank': target_f, 'comp_ranks': comp_found,
-                                     'comp_urls': comp_urls_found})
-                    got_valid_answer = True
+    for it in organic:
+        r_url    = it.get("link", "") or ""
+        r_domain = it.get("domain", "") or ""
+        try:
+            pos = int(it.get("position") or 101)
+        except (TypeError, ValueError):
+            pos = 101
+        if pos > SEARCH_DEPTH:
+            continue
+        clean_r = normalize_url(r_url)
 
-                    # ── Plain-English log, with a link to the exact Google page DataForSEO saw ──
-                    see_it = f" | See the exact Google page: {check_url}" if check_url else ""
-                    if best <= 20:
-                        url_short = best_url[:80] + "..." if len(best_url) > 80 else best_url
-                        extra = ""
-                        if best_is_snippet:
-                            extra = " (EduTap is in the top answer box)"
-                        elif best_abs and best_abs != best:
-                            extra = f" (#{best_abs} if you also count the boxes/videos/questions on the page)"
-                        msg = f"{label}Ranked #{best}{extra} | Bucket: {bucket} | URL: {url_short}{see_it}"
-                        _log(run_id, run_type, "success", msg, keyword=keyword,
-                             exam=item['exam'], kw_type=item['type'],
-                             rank=best, ranked_url=best_url)
-                    else:
-                        # ── Free check: what did the Google page actually contain? ──
-                        # Tells us if EduTap was really missing, or was on the page
-                        # inside a result type the code does not count.
-                        organic = [i for i in items_list if i.get('type') == 'organic']
-                        last_pos = max([(i.get('rank_group') or 0) for i in organic] or [0])
-                        found_in = sorted({str(i.get('type')) for i in items_list
-                                           if 'edutap.in' in json.dumps(i).lower()})
-                        page_info = f" | Google page had {len(organic)} normal results (up to #{last_pos})"
-                        if 'ai_overview' in found_in:
-                            page_info += " | EduTap is only inside Google's AI Overview box, not as a normal link"
-                        elif found_in:
-                            page_info += (f" | EduTap was on the page only inside: {', '.join(found_in)}"
-                                          f" (not counted as a rank)")
-                        else:
-                            page_info += " | EduTap was not anywhere on this page"
-                        again = "" if is_second_check else " | Checking Google once more..."
-                        msg = f"{label}Not in Top 20 — EduTap.in not found in first 20 Google results{page_info}{again}{see_it}"
-                        _log(run_id, run_type, "info", msg, keyword=keyword,
-                             exam=item['exam'], kw_type=item['type'])
+        if _domain_matches(r_domain, r_url, TARGET_DOMAIN):
+            if pos < best:
+                best, best_url = pos, r_url
+            if clean_t and clean_t in clean_r and pos < target_f:
+                target_f = pos
 
-                except Exception as parse_err:
-                    _log(run_id, run_type, "error", f"Failed to read API response — technical error: {parse_err}",
-                         keyword=keyword, exam=item['exam'], kw_type=item['type'])
+        for c_key, c_domain in COMPETITORS.items():
+            if _domain_matches(r_domain, r_url, c_domain) and pos < comp_found[c_key]:
+                comp_found[c_key] = pos
+                comp_urls[c_key]  = r_url
 
-            else:
-                err_msg = data.get('status_message', str(response.status_code))
-                if 'balance' in err_msg.lower() or response.status_code == 402:
-                    msg = f"⚠️ LOW BALANCE — DataForSEO rejected this keyword. Check your DataForSEO account balance. Details: {err_msg}"
-                else:
-                    msg = f"API returned an error (HTTP {response.status_code}): {err_msg}"
-                print(f"❌ {keyword}: {msg}")
-                _log(run_id, run_type, "error", msg, keyword=keyword, exam=item['exam'], kw_type=item['type'])
-                res_data['url'] = f"Err: {err_msg}"
+    return {"rank": best, "url": best_url, "target_rank": target_f,
+            "comp_ranks": comp_found, "comp_urls": comp_urls,
+            "organic_count": len(organic),
+            "search_id": ((data or {}).get("search_metadata") or {}).get("id", "")}
 
-        except Exception as e:
-            msg = f"Network error — could not reach DataForSEO: {e}"
-            print(f"❌ {keyword}: {msg}")
-            _log(run_id, run_type, "error", msg, keyword=keyword, exam=item['exam'], kw_type=item['type'])
-            res_data['url'] = f"Err: {str(e)}"
 
-        if got_valid_answer:
-            # Found EduTap, or this was already the 2nd look -> stop
-            if res_data['rank'] <= 20 or is_second_check:
-                break
-            # Not found on the 1st look -> remember it and look once more
-            first_answer = res_data
+def _bucket(rank):
+    if rank <= 3:  return "B1 (1-3)"
+    if rank <= 10: return "B2 (4-10)"
+    if rank <= 20: return "B3 (11-20)"
+    return "B4 (>20)"
 
-    # Keep the better of the two looks
-    if first_answer is not None and res_data['rank'] >= first_answer['rank']:
-        res_data = first_answer
 
-    res_data['cost'] = accumulated_cost
+def fetch_rank_single(item, run_id, run_type, prev_info=None):
+    """Check ONE keyword.
+    Rule:
+      - Look up to 3 times. Stop at the first look where EduTap is found.
+      - If found only on look 2 or 3 and the number is more than 5 places worse
+        than last time, look 1 more time and keep the better number.
+      - If not found in any look:
+          * last time it had a Top-20 rank (and last time was not already
+            'Not confirmed')  -> save 'Not confirmed' and keep the last rank
+                                 (so no false 'dropped' alert)
+          * otherwise           -> save 'Not in Top 20'."""
+    keyword    = item['keyword']
+    target_url = item.get('target_url', '') or ''
+    exam       = item.get('exam', ''); kw_type = item.get('type', '')
+    prev_rank, prev_url = (prev_info or {}).get(keyword, (101, ""))
+
+    res_data = {
+        "keyword": keyword, "exam": exam, "type": kw_type,
+        "rank": 101, "url": "No Data", "bucket": "B4 (>20)", "target_rank": 101, "cost": 0,
+        "searches": 0, "looks": 0,
+        "comp_ranks": {k: 101 for k in COMPETITORS.keys()},
+        "comp_urls":  {k: ""  for k in COMPETITORS.keys()}
+    }
+
+    searches = 0
+    pages = []          # every good page we got: list of (look_number, page_info)
+    last_error = None
+    look = 0
+    max_looks = MAX_LOOKS
+    jump_checked = False
+
+    while look < max_looks:
+        look += 1
+        if look > 1:
+            time.sleep(WAIT_BETWEEN_LOOKS)
+        data, err, used = _searchapi_call(keyword)
+        searches += used
+        if err:
+            # The call was already tried again inside _searchapi_call, so stop here
+            last_error = err
+            break
+        page = _read_page(data, target_url)
+        pages.append((look, page))
+
+        if page["rank"] <= 20:
+            # Found. Is it a suspicious jump on a later look?
+            if (look >= 2 and not jump_checked and prev_rank <= 20
+                    and page["rank"] - prev_rank > JUMP_LIMIT):
+                jump_checked = True
+                max_looks = look + 1      # one extra look
+                continue
+            break
+
+    res_data["searches"] = searches
+    res_data["looks"]    = look
+    res_data["cost"]     = searches * COST_PER_SEARCH
+
+    if not pages:
+        # Every look failed with an error
+        msg = last_error or "No answer from SearchApi"
+        print(f"❌ {keyword}: {msg}")
+        _log(run_id, run_type, "error", msg, keyword=keyword, exam=exam, kw_type=kw_type)
+        res_data['url'] = f"Err: {msg}"[:250]
+        return res_data
+
+    found = [(lk, p) for lk, p in pages if p["rank"] <= 20]
+    if found:
+        # keep the best (lowest) number among the looks that found EduTap
+        lk, p = min(found, key=lambda x: x[1]["rank"])
+        res_data.update({"rank": p["rank"], "url": p["url"], "bucket": _bucket(p["rank"]),
+                         "target_rank": p["target_rank"], "comp_ranks": p["comp_ranks"],
+                         "comp_urls": p["comp_urls"]})
+        url_short = p["url"][:80] + "..." if len(p["url"]) > 80 else p["url"]
+        look_note = f"found on look {lk} of {look}" if look > 1 else "found on look 1"
+        if jump_checked:
+            look_note += f" (extra look done because number was far from last rank #{prev_rank})"
+        msg = f"Ranked #{p['rank']} | {look_note} | Bucket: {res_data['bucket']} | URL: {url_short}"
+        _log(run_id, run_type, "success", msg, keyword=keyword, exam=exam, kw_type=kw_type,
+             rank=p["rank"], ranked_url=p["url"])
+        return res_data
+
+    # Not found in any look
+    lk, p = pages[-1]
+    res_data.update({"target_rank": 101, "comp_ranks": p["comp_ranks"], "comp_urls": p["comp_urls"]})
+
+    if prev_rank <= 20 and not _is_not_confirmed(prev_url):
+        res_data.update({"rank": prev_rank, "url": NOT_CONFIRMED_LABEL, "bucket": _bucket(prev_rank)})
+        msg = (f"Not confirmed — EduTap not seen in {look} looks (Google page had "
+               f"{p['organic_count']} normal results). Last rank #{prev_rank} kept, no drop alert. "
+               f"Please check this keyword on a phone.")
+        _log(run_id, run_type, "warning", msg, keyword=keyword, exam=exam, kw_type=kw_type,
+             rank=prev_rank)
+    else:
+        res_data.update({"rank": 101, "url": "Not Ranked", "bucket": "B4 (>20)"})
+        why = (" (was also 'Not confirmed' last time, so now marked as Not in Top 20)"
+               if prev_rank <= 20 else "")
+        msg = (f"Not in Top 20 — EduTap not seen in {look} looks (Google page had "
+               f"{p['organic_count']} normal results){why}")
+        _log(run_id, run_type, "info", msg, keyword=keyword, exam=exam, kw_type=kw_type)
     return res_data
 
 
@@ -528,7 +512,8 @@ def fetch_rank_single(item, run_id, run_type):
 # PREV MAP — safe timestamp-filtered build
 # Prevents prev/curr rank swap in email
 # ─────────────────────────────────────────────
-def build_prev_map_safe():
+def build_prev_info_safe():
+    """{keyword: (last rank, last url)} from runs older than 2 minutes."""
     if not supabase: return {}
     ist_now = datetime.utcnow() + timedelta(hours=5, minutes=30)
     cutoff  = (ist_now - timedelta(minutes=2)).strftime("%Y-%m-%d %H:%M")
@@ -536,7 +521,7 @@ def build_prev_map_safe():
     while True:
         try:
             response = (supabase.table("rankings")
-                        .select("keyword, rank, date")
+                        .select("keyword, rank, url, date")
                         .lte("date", cutoff)
                         .range(start, start + 999)
                         .execute())
@@ -546,23 +531,35 @@ def build_prev_map_safe():
             if len(rows) < 1000: break
             start += 1000
         except Exception as e:
-            print(f"⚠️ build_prev_map_safe error: {e}")
+            print(f"⚠️ build_prev_info_safe error: {e}")
             break
     if not all_rows: return {}
     df = pd.DataFrame(all_rows)
     df['date_dt'] = pd.to_datetime(df['date'])
     df = df.sort_values('date_dt')
     latest = df.groupby('keyword').tail(1)
-    return {row['keyword']: int(row['rank']) for _, row in latest.iterrows()}
+    out = {}
+    for _, row in latest.iterrows():
+        try: r = int(row['rank'])
+        except (TypeError, ValueError): r = 101
+        out[row['keyword']] = (r, str(row.get('url') or ""))
+    return out
+
+
+def build_prev_map_safe():
+    """{keyword: last rank} — kept for the dashboard and email code."""
+    return {k: v[0] for k, v in build_prev_info_safe().items()}
 
 
 # ─────────────────────────────────────────────
 # MAIN RUNNER
 # Rolling save every 50 + run logging
 # ─────────────────────────────────────────────
-def perform_update(keywords_list, progress_bar=None, status_text=None, run_type="manual"):
-    global _log_buffer
+def perform_update(keywords_list, progress_bar=None, status_text=None, run_type="manual", prev_info=None):
+    global _log_buffer, _stop_reason, LAST_RUN_SEARCHES
     _log_buffer = []
+    LAST_RUN_SEARCHES = 0
+    _stop_reason = None
 
     ist_now  = datetime.utcnow() + timedelta(hours=5, minutes=30)
     date_str = ist_now.strftime("%Y-%m-%d %H:%M")
@@ -570,17 +567,25 @@ def perform_update(keywords_list, progress_bar=None, status_text=None, run_type=
 
     total           = len(keywords_list)
     total_run_cost  = 0.0
+    total_searches  = 0
     completed       = 0
     results_to_save = []
     pending_save    = []
     log_flush_count = 0
+    stop_logged     = False
 
-    place = resolve_serp_location()
+    if prev_info is None:
+        prev_info = build_prev_info_safe()
+
+    if not SEARCHAPI_KEY:
+        _log(run_id, run_type, "error", "SEARCHAPI_KEY is missing in Secrets. Nothing was checked.")
+        flush_logs()
+        return date_str, 0.0, []
+
     _log(run_id, run_type, "info",
-         f"Run started — {total} keywords queued | Place: {place['label']} | Device: {SERP_DEVICE} | "
+         f"Run started — {total} keywords queued | Tool: SearchApi | Place: {SEARCH_LOCATION or 'India'} | "
+         f"Device: {SEARCH_DEVICE} | Up to {MAX_LOOKS} looks per keyword | "
          f"Workers: {MAX_WORKERS} | Started at: {date_str} IST")
-    if place.get("warning"):
-        _log(run_id, run_type, "warning", "📍 " + place["warning"])
 
     def flush_rankings(rows):
         if not rows or not supabase: return
@@ -589,7 +594,7 @@ def perform_update(keywords_list, progress_bar=None, status_text=None, run_type=
             except Exception as e: print(f"❌ Ranking batch save error: {e}")
 
     with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
-        future_map = {executor.submit(fetch_rank_single, item, run_id, run_type): item
+        future_map = {executor.submit(fetch_rank_single, item, run_id, run_type, prev_info): item
                       for item in keywords_list}
         for future in as_completed(future_map):
             try:
@@ -602,7 +607,21 @@ def perform_update(keywords_list, progress_bar=None, status_text=None, run_type=
                      keyword=item.get('keyword',''), exam=item.get('exam',''), kw_type=item.get('type',''))
                 continue
 
+            completed += 1
             total_run_cost += res['cost']
+            total_searches += res.get('searches', 0)
+
+            if _stop_reason and not stop_logged:
+                _log(run_id, run_type, "error", "⛔ " + _stop_reason +
+                     " | Remaining keywords were skipped. Check the SearchApi key / monthly searches.")
+                stop_logged = True
+
+            # Do not save keywords that only got an error (keeps the last good rank on the dashboard)
+            if str(res['url']).startswith("Err:"):
+                if status_text: status_text.text(f"Processing... {completed}/{total}")
+                if progress_bar: progress_bar.progress(completed / total)
+                continue
+
             cr = res['comp_ranks']; cu = res['comp_urls']
             row = {
                 "date": date_str, "keyword": res['keyword'], "exam": res['exam'], "type": res['type'],
@@ -616,7 +635,6 @@ def perform_update(keywords_list, progress_bar=None, status_text=None, run_type=
             }
             results_to_save.append(row)
             pending_save.append(row)
-            completed += 1
             log_flush_count += 1
 
             # Rolling save every SAVE_EVERY
@@ -638,9 +656,13 @@ def perform_update(keywords_list, progress_bar=None, status_text=None, run_type=
         flush_rankings(pending_save)
         print(f"💾 Final ranking batch saved ({len(pending_save)} rows)")
 
+    LAST_RUN_SEARCHES = total_searches
+    not_conf = sum(1 for r in results_to_save if _is_not_confirmed(r['url']))
+    avg_looks = (total_searches / len(results_to_save)) if results_to_save else 0
     _log(run_id, run_type, "info",
-         f"Run completed — {completed}/{total} keywords processed | "
-         f"Total cost this run: ${total_run_cost:.4f}")
+         f"Run completed — {len(results_to_save)}/{total} keywords saved | "
+         f"SearchApi searches used: {total_searches} (avg {avg_looks:.2f} per keyword) | "
+         f"Not confirmed: {not_conf} | Estimated cost: ${total_run_cost:.4f}")
     flush_logs()
 
     try:
@@ -654,9 +676,72 @@ def perform_update(keywords_list, progress_bar=None, status_text=None, run_type=
 
 
 # ─────────────────────────────────────────────
+# SEARCHAPI ACCOUNT — searches left this month (this check is free)
+# ─────────────────────────────────────────────
+LOW_CREDITS_WARNING = 1000   # warn in the email when fewer searches than this are left
+
+def get_searchapi_credits():
+    """Returns {'left': int, 'used': int, 'allowance': int, 'period_end': str} or None."""
+    if not SEARCHAPI_KEY: return None
+    try:
+        r = requests.get("https://www.searchapi.io/api/v1/me",
+                         params={"api_key": SEARCHAPI_KEY}, timeout=15)
+        if r.status_code == 200:
+            d = r.json() or {}
+            acc = d.get("account") or {}
+            sub = d.get("subscription") or {}
+            return {"left": int(acc.get("remaining_credits") or 0),
+                    "used": int(acc.get("current_month_usage") or 0),
+                    "allowance": int(acc.get("monthly_allowance") or 0),
+                    "period_end": str(sub.get("period_end") or "")[:10]}
+    except Exception as e:
+        print(f"⚠️ Could not fetch SearchApi searches left: {e}")
+    return None
+
+
+def get_dataforseo_balance():
+    """Old name kept so older code keeps working. Now returns SearchApi info (dict) or None."""
+    return get_searchapi_credits()
+
+
+def _credits_banner(credits):
+    if not credits or credits.get("left", 0) >= LOW_CREDITS_WARNING:
+        return ""
+    return (
+        "<div style='background:#c0392b;color:white;padding:10px 14px;"
+        "border-radius:6px;font-size:14px;margin-bottom:12px;'>"
+        f"🚨 <b>SearchApi searches are running low: only {credits['left']:,} left this month. "
+        "The next run may stop before all keywords are checked.</b></div>"
+    )
+
+
+def _credits_line(credits):
+    if not credits:
+        return None
+    left = credits.get("left", 0)
+    if left < LOW_CREDITS_WARNING:   color, icon = "#c0392b", "🔴"
+    elif left < 3000:                color, icon = "#e67e22", "🟠"
+    else:                            color, icon = "#27ae60", "🟢"
+    txt = (f"<b>SearchApi searches left this month:</b> "
+           f"<span style='color:{color};'>{icon} {left:,} of {credits.get('allowance', 0):,}</span>")
+    if credits.get("period_end"):
+        txt += f" (plan renews {credits['period_end']})"
+    return txt
+
+
+def _subject_suffix(credits):
+    return " ⚠️ SEARCHAPI SEARCHES LOW" if credits and credits.get("left", 0) < LOW_CREDITS_WARNING else ""
+
+
+# ─────────────────────────────────────────────
 # EMAIL
 # ─────────────────────────────────────────────
-def send_email_alert(alerts_dict, subject_prefix="Automatic Run", all_checked_data=None, run_cost=None, dataforseo_balance=None):
+def send_email_alert(alerts_dict, subject_prefix="Automatic Run", all_checked_data=None, run_cost=None,
+                     credits_left=None, dataforseo_balance=None):
+    # dataforseo_balance is the old argument name; it now carries SearchApi info
+    credits = credits_left if credits_left is not None else dataforseo_balance
+    if not isinstance(credits, dict): credits = None
+
     recipients = [e.strip() for e in EMAIL_RECEIVER.split(",")] if "," in EMAIL_RECEIVER else [EMAIL_RECEIVER]
     ist_now    = datetime.utcnow() + timedelta(hours=5, minutes=30)
     date_label = ist_now.strftime('%d %b %Y')
@@ -682,20 +767,12 @@ def send_email_alert(alerts_dict, subject_prefix="Automatic Run", all_checked_da
         html += "</table><br>"
         return html
 
-    # ── Low balance urgent flag ───────────────────────────────────
-    low_balance = dataforseo_balance is not None and dataforseo_balance < 5
+    banner = _credits_banner(credits)
+    subj_suffix = _subject_suffix(credits)
 
     if has_alerts:
-        subj_suffix = " ⚠️ TOP UP DATAFORSEO NOW" if low_balance else ""
         msg['Subject'] = f"{subject_prefix}: SEO Alert ({date_label}){subj_suffix}"
-        html_body  = f"<h2>📉 {subject_prefix} Report ({date_label})</h2>"
-        if low_balance:
-            html_body += (
-                f"<div style='background:#c0392b;color:white;padding:10px 14px;"
-                f"border-radius:6px;font-size:14px;margin-bottom:12px;'>"
-                f"🚨 <b>URGENT: DataForSEO balance is critically low (${dataforseo_balance:.4f}). "
-                f"Please top up immediately — the next run will fail without sufficient balance.</b></div>"
-            )
+        html_body  = f"<h2>📉 {subject_prefix} Report ({date_label})</h2>" + banner
         html_body += "<p>Significant rank changes:</p>"
         if alerts_dict["red"]:
             html_body += "<h3 style='color:red;'>🔴 Critical: Dropped out of Top 10</h3>" + generate_grouped_table(alerts_dict["red"])
@@ -706,46 +783,21 @@ def send_email_alert(alerts_dict, subject_prefix="Automatic Run", all_checked_da
         if alerts_dict["green"]:
             html_body += "<h3 style='color:green;'>🟢 Celebration: Entered Top 3!</h3>" + generate_grouped_table(alerts_dict["green"])
     elif is_manual and all_checked_data:
-        subj_suffix = " ⚠️ TOP UP DATAFORSEO NOW" if low_balance else ""
         msg['Subject'] = f"{subject_prefix}: Report Completed ({date_label}){subj_suffix}"
-        html_body  = f"<h2>✅ Manual Run Completed ({date_label})</h2>"
-        if low_balance:
-            html_body += (
-                f"<div style='background:#c0392b;color:white;padding:10px 14px;"
-                f"border-radius:6px;font-size:14px;margin-bottom:12px;'>"
-                f"🚨 <b>URGENT: DataForSEO balance is critically low (${dataforseo_balance:.4f}). "
-                f"Please top up immediately — the next run will fail without sufficient balance.</b></div>"
-            )
+        html_body  = f"<h2>✅ Manual Run Completed ({date_label})</h2>" + banner
         html_body += "<p>No significant alerts. Full status:</p>"
         html_body += generate_grouped_table(all_checked_data)
     else:
-        subj_suffix = " ⚠️ TOP UP DATAFORSEO NOW" if low_balance else ""
         msg['Subject'] = f"{subject_prefix}: All Stable ({date_label}){subj_suffix}"
-        html_body  = f"<h2>✅ Automatic Update Completed ({date_label})</h2>"
-        if low_balance:
-            html_body += (
-                f"<div style='background:#c0392b;color:white;padding:10px 14px;"
-                f"border-radius:6px;font-size:14px;margin-bottom:12px;'>"
-                f"🚨 <b>URGENT: DataForSEO balance is critically low (${dataforseo_balance:.4f}). "
-                f"Please top up immediately — the next run will fail without sufficient balance.</b></div>"
-            )
+        html_body  = f"<h2>✅ Automatic Update Completed ({date_label})</h2>" + banner
         html_body += "<p>No significant drops or changes detected. All keywords stable.</p>"
 
-    # ── Cost & Balance footer (shown in every email) ──────────────
+    # ── Cost & searches-left footer (shown in every email) ──────────────
     footer_lines = []
     if run_cost is not None:
-        footer_lines.append(f"<b>This run cost:</b> ${run_cost:.4f}")
-    if dataforseo_balance is not None:
-        if dataforseo_balance < 5:
-            bal_color = "#c0392b"; bal_icon = "🔴"
-        elif dataforseo_balance < 20:
-            bal_color = "#e67e22"; bal_icon = "🟠"
-        else:
-            bal_color = "#27ae60"; bal_icon = "🟢"
-        footer_lines.append(
-            f"<b>DataForSEO balance:</b> "
-            f"<span style='color:{bal_color};'>{bal_icon} ${dataforseo_balance:.4f}</span>"
-        )
+        footer_lines.append(f"<b>This run cost (estimate):</b> ${run_cost:.4f}")
+    cl = _credits_line(credits)
+    if cl: footer_lines.append(cl)
     if footer_lines:
         html_body += (
             "<br><hr style='border:1px solid #ddd;'>"
@@ -768,8 +820,8 @@ def send_email_alert(alerts_dict, subject_prefix="Automatic Run", all_checked_da
         print(f"❌ Email failed: {e}")
 
 # ─────────────────────────────────────────────
-# WEEKLY AUTOMATIC EMAIL — XLSX ATTACHMENT ONLY
-# Keeps the existing manual email function above unchanged.
+# AUTOMATIC (SCHEDULED) EMAIL — XLSX ATTACHMENT ONLY
+# The sheet holds ONLY the exams that ran in this run (cron_job.py passes them).
 # ─────────────────────────────────────────────
 def _display_rank_for_excel(value):
     """Convert the internal 101 sentinel to a user-friendly Excel value."""
@@ -795,7 +847,7 @@ def _build_weekly_excel_report(master_df, results_data, run_date):
 
     date_label = run_dt.strftime("%d %b %Y")
     file_date = run_dt.strftime("%Y-%m-%d")
-    filename = f"EduTap_SEO_Weekly_Report_{file_date}.xlsx"
+    filename = f"EduTap_SEO_Report_{file_date}.xlsx"
 
     headers = [
         "Exam", "Cluster", "Keyword", "Type", "Volume", "Target URL",
@@ -815,14 +867,15 @@ def _build_weekly_excel_report(master_df, results_data, run_date):
 
     last_col = get_column_letter(len(headers))
     ws.merge_cells(f"A1:{last_col}1")
-    ws["A1"] = "EduTap SEO Weekly Keyword Report"
+    ws["A1"] = "EduTap SEO Keyword Report"
     ws["A1"].font = Font(size=16, bold=True, color="FFFFFF")
     ws["A1"].fill = PatternFill("solid", fgColor="0097A8")
     ws["A1"].alignment = Alignment(horizontal="left", vertical="center")
     ws.row_dimensions[1].height = 26
 
     ws.merge_cells(f"A2:{last_col}2")
-    ws["A2"] = f"Run Date: {date_label} | Total Keywords: {len(master_df)}"
+    exams_in_sheet = ", ".join(sorted({str(e) for e in master_df.get("exam", pd.Series(dtype=str)).dropna().unique()}))
+    ws["A2"] = f"Run Date: {date_label} | Keywords: {len(master_df)} | Exams: {exams_in_sheet}"
     ws["A2"].font = Font(size=10, color="666666")
     ws["A2"].alignment = Alignment(horizontal="left", vertical="center")
     ws.row_dimensions[2].height = 20
@@ -854,6 +907,7 @@ def _build_weekly_excel_report(master_df, results_data, run_date):
         result = result_map.get(keyword, {})
         comp_ranks = result.get("comp_ranks", {}) or {}
         comp_urls = result.get("comp_urls", {}) or {}
+        not_conf = _is_not_confirmed(result.get("url"))
 
         values = [
             master_row.get("exam", result.get("exam", "")),
@@ -864,7 +918,7 @@ def _build_weekly_excel_report(master_df, results_data, run_date):
             master_row.get("target_url", ""),
             _display_rank_for_excel(result.get("rank")),
             result.get("url", "No Result"),
-            _display_rank_for_excel(result.get("target_rank")),
+            "Not confirmed" if not_conf else _display_rank_for_excel(result.get("target_rank")),
             result.get("bucket", "No Result"),
             _display_rank_for_excel(comp_ranks.get("anujjindal")),
             comp_urls.get("anujjindal", ""),
@@ -904,7 +958,7 @@ def _build_weekly_excel_report(master_df, results_data, run_date):
                         cell.fill = top10_fill
                     else:
                         cell.fill = top20_fill
-                elif value in ("Not in Top 20", "No Result"):
+                elif value in ("Not in Top 20", "No Result", "Not confirmed"):
                     cell.alignment = Alignment(horizontal="center", vertical="center")
                     cell.fill = not_ranked_fill
 
@@ -936,53 +990,45 @@ def _build_weekly_excel_report(master_df, results_data, run_date):
     return output.getvalue(), filename, date_label
 
 
-def send_weekly_email_report(master_df, results_data, run_date, run_cost=None, dataforseo_balance=None):
+def send_weekly_email_report(master_df, results_data, run_date, run_cost=None, dataforseo_balance=None,
+                             credits_left=None, exam_groups=None, searches_used=None,
+                             subject_prefix="📅 Automatic Run"):
     """
-    Send the scheduled weekly email with only:
-    1) date,
-    2) formatted XLSX attachment containing all keywords,
-    3) run summary / existing balance reminder.
+    Scheduled email: date + XLSX attachment (only the exams that ran) + run summary.
+    exam_groups = {"Every week": [...], "Every 15 days": [...], "Once a month": [...]} — exams that ran.
+    """
+    credits = credits_left if credits_left is not None else dataforseo_balance
+    if not isinstance(credits, dict): credits = None
 
-    This function is intentionally separate from send_email_alert() so manual emails stay unchanged.
-    """
     recipients = [e.strip() for e in EMAIL_RECEIVER.split(",")] if "," in EMAIL_RECEIVER else [EMAIL_RECEIVER]
     excel_bytes, filename, date_label = _build_weekly_excel_report(master_df, results_data, run_date)
-
-    low_balance = dataforseo_balance is not None and dataforseo_balance < 5
-    subj_suffix = " ⚠️ TOP UP DATAFORSEO NOW" if low_balance else ""
 
     msg = MIMEMultipart()
     msg["From"] = EMAIL_SENDER
     msg["To"] = ", ".join(recipients)
-    msg["Subject"] = f"📅 Weekly Automatic Run: SEO Report ({date_label}){subj_suffix}"
+    msg["Subject"] = f"{subject_prefix}: SEO Report ({date_label}){_subject_suffix(credits)}"
 
     html_body = f"<h2>📅 {date_label}</h2>"
     html_body += f"<p>📎 <b>Attached:</b> {filename}</p>"
+    html_body += _credits_banner(credits)
 
-    # Keep the existing low-balance reminder behavior for the weekly email.
-    if low_balance:
-        html_body += (
-            f"<div style='background:#c0392b;color:white;padding:10px 14px;"
-            f"border-radius:6px;font-size:14px;margin-bottom:12px;'>"
-            f"🚨 <b>URGENT: DataForSEO balance is critically low (${dataforseo_balance:.4f}). "
-            f"Please top up immediately — the next run will fail without sufficient balance.</b></div>"
-        )
+    if exam_groups:
+        html_body += "<p><b>Exams in this run:</b></p><ul>"
+        for group_name, exams in exam_groups.items():
+            if exams:
+                html_body += f"<li><b>{group_name}:</b> {', '.join(exams)}</li>"
+        html_body += "</ul>"
 
+    not_conf = sum(1 for r in (results_data or []) if _is_not_confirmed(r.get("url")))
     summary_lines = [f"<b>Keywords checked:</b> {len(master_df)}"]
+    if not_conf:
+        summary_lines.append(f"<b>Not confirmed</b> (EduTap not seen in 3 looks, last rank kept): {not_conf}")
+    if searches_used is not None:
+        summary_lines.append(f"<b>SearchApi searches used:</b> {searches_used:,}")
     if run_cost is not None:
-        summary_lines.append(f"<b>This run cost:</b> ${run_cost:.4f}")
-
-    if dataforseo_balance is not None:
-        if dataforseo_balance < 5:
-            bal_color = "#c0392b"; bal_icon = "🔴"
-        elif dataforseo_balance < 20:
-            bal_color = "#e67e22"; bal_icon = "🟠"
-        else:
-            bal_color = "#27ae60"; bal_icon = "🟢"
-        summary_lines.append(
-            f"<b>DataForSEO balance:</b> "
-            f"<span style='color:{bal_color};'>{bal_icon} ${dataforseo_balance:.4f}</span>"
-        )
+        summary_lines.append(f"<b>This run cost (estimate):</b> ${run_cost:.4f}")
+    cl = _credits_line(credits)
+    if cl: summary_lines.append(cl)
 
     html_body += (
         "<hr style='border:1px solid #ddd;'>"
@@ -1008,7 +1054,7 @@ def send_weekly_email_report(master_df, results_data, run_date, run_cost=None, d
         server.login(EMAIL_SENDER, EMAIL_PASSWORD)
         server.sendmail(EMAIL_SENDER, recipients, msg.as_string())
         server.quit()
-        print(f"📧 Weekly XLSX Email Sent Successfully! Attachment: {filename}")
+        print(f"📧 Automatic XLSX Email Sent Successfully! Attachment: {filename}")
     except Exception as e:
         print(f"❌ Weekly email failed: {e}")
 
