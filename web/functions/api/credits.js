@@ -9,10 +9,16 @@ export async function onRequestGet({ env }) {
   const d = await r.json();
   const acc = d.account || {};
   const sub = d.subscription || {};
+  // SearchApi sends the plan as allowance + usage. "remaining_credits" can be only the
+  // small free bonus (e.g. 2), so plan searches left = allowance - used.
+  const allowance = Number(acc.monthly_allowance || 0);
+  const used = Number(acc.current_month_usage || 0);
+  const bonus = Number(acc.remaining_credits || 0);
+  const left = Math.max(Math.max(0, allowance - used), bonus);
   return json({
-    left: Number(acc.remaining_credits || 0),
-    used: Number(acc.current_month_usage || 0),
-    allowance: Number(acc.monthly_allowance || 0),
+    left,
+    used,
+    allowance,
     period_end: (sub.period_end || "").slice(0, 10),
   });
 }
