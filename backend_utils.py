@@ -690,9 +690,13 @@ def get_searchapi_credits():
             d = r.json() or {}
             acc = d.get("account") or {}
             sub = d.get("subscription") or {}
-            return {"left": int(acc.get("remaining_credits") or 0),
-                    "used": int(acc.get("current_month_usage") or 0),
-                    "allowance": int(acc.get("monthly_allowance") or 0),
+            # "remaining_credits" can be only the small free bonus, so use allowance - used
+            allowance = int(acc.get("monthly_allowance") or 0)
+            used = int(acc.get("current_month_usage") or 0)
+            bonus = int(acc.get("remaining_credits") or 0)
+            return {"left": max(max(0, allowance - used), bonus),
+                    "used": used,
+                    "allowance": allowance,
                     "period_end": str(sub.get("period_end") or "")[:10]}
     except Exception as e:
         print(f"⚠️ Could not fetch SearchApi searches left: {e}")
@@ -1057,4 +1061,3 @@ def send_weekly_email_report(master_df, results_data, run_date, run_cost=None, d
         print(f"📧 Automatic XLSX Email Sent Successfully! Attachment: {filename}")
     except Exception as e:
         print(f"❌ Weekly email failed: {e}")
-
