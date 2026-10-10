@@ -1,0 +1,12 @@
+// Cloudflare settings for the EduTap Rank Board website.
+// "npx wrangler deploy" (Cloudflare's deploy command) reads this file.
+{
+  "name": "edutap-seo-tracker",
+  "main": "worker/index.js",
+  "compatibility_date": "2025-07-18",
+  // The website files (HTML, CSS, JS) are in the "web" folder
+  "assets": { "directory": "./web", "binding": "ASSETS" },
+  // Keep the passwords/keys you added in the Cloudflare dashboard on every deploy
+  "keep_vars": true,
+  "workers_dev": true
+}
